@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nexus360 — Project Report</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,700;0,9..144,900;1,9..144,400&family=DM+Sans:wght@300;400;500&display=swap');
+
+:root {
+  --ink:       #0d0f12;
+  --paper:     #f5f2eb;
+  --paper2:    #ede9e0;
+  --paper3:    #e4dfd4;
+  --accent:    #c8410a;
+  --accent2:   #1a5c3a;
+  --accent3:   #1c3a6e;
+  --rule:      #c9c2b4;
+  --text:      #1a1a1a;
+  --text-dim:  #5a5248;
+  --text-muted:#9a9188;
+  --font-serif: 'Fraunces', Georgia, serif;
+  --font-mono:  'DM Mono', 'Courier New', monospace;
+  --font-sans:  'DM Sans', sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--paper);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Page layout ── */
+.page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 60px 48px 120px;
+}
+
+/* ── Cover ── */
+.cover {
+  padding: 80px 0 64px;
+  border-bottom: 2px solid var(--ink);
+  margin-bottom: 64px;
+  position: relative;
+}
+
+.cover-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.2em;
+  color: var(--accent);
+  text-transform: uppercase;
+  margin-bottom: 20px;
+}
+
+.cover-title {
+  font-family: var(--font-serif);
+  font-weight: 900;
+  font-size: 4.2rem;
+  line-height: 1.0;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+
+.cover-title em {
+  font-style: italic;
+  color: var(--accent);
+}
+
+.cover-subtitle {
+  font-family: var(--font-serif);
+  font-weight: 300;
+  font-style: italic;
+  font-size: 1.3rem;
+  color: var(--text-dim);
+  margin-bottom: 40px;
+}
+
+.cover-meta {
+  display: flex;
+  gap: 32px;
+  flex-wrap: wrap;
+}
+
+.cover-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cover-meta-label {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.15em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.cover-meta-val {
+  font-family: var(--font-sans);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.cover-stamp {
+  position: absolute;
+  top: 80px;
+  right: 0;
+  width: 90px;
+  height: 90px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transform: rotate(12deg);
+}
+
+.cover-stamp-text {
+  font-family: var(--font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  text-align: center;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+/* ── TOC ── */
+.toc {
+  background: var(--paper2);
+  border: 1px solid var(--rule);
+  padding: 28px 32px;
+  margin-bottom: 64px;
+}
+
+.toc-title {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.2em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+
+.toc-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+  margin-bottom: 6px;
+}
+
+.toc-num {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--accent);
+  width: 32px;
+  flex-shrink: 0;
+}
+
+.toc-dots {
+  flex: 1;
+  border-bottom: 1px dotted var(--rule);
+  margin: 0 8px;
+  margin-bottom: 3px;
+}
+
+.toc-text {
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.toc-text:hover { color: var(--accent); }
+
+/* ── Sections ── */
+.section {
+  margin-bottom: 72px;
+  scroll-margin-top: 32px;
+}
+
+.section-num {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.2em;
+  color: var(--accent);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.section-title {
+  font-family: var(--font-serif);
+  font-weight: 700;
+  font-size: 1.9rem;
+  line-height: 1.2;
+  color: var(--ink);
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--rule);
+}
+
+/* ── Typography ── */
+p {
+  font-size: 0.92rem;
+  color: var(--text-dim);
+  margin-bottom: 16px;
+  line-height: 1.8;
+}
+
+strong { color: var(--text); font-weight: 500; }
+
+h3 {
+  font-family: var(--font-serif);
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: var(--ink);
+  margin: 28px 0 10px;
+}
+
+/* ── Pull quote ── */
+.pullquote {
+  border-left: 3px solid var(--accent);
+  padding: 12px 24px;
+  margin: 28px 0;
+  background: var(--paper2);
+}
+
+.pullquote p {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.05rem;
+  color: var(--ink);
+  margin: 0;
+}
+
+/* ── Phase cards ── */
+.phase-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin: 24px 0;
+}
+
+.phase-card {
+  background: var(--paper2);
+  border: 1px solid var(--rule);
+  padding: 20px;
+}
+
+.phase-card-num {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.15em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.phase-card-title {
+  font-family: var(--font-serif);
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+
+.phase-card p {
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+/* ── Challenge cards ── */
+.challenge {
+  border: 1px solid var(--rule);
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+
+.challenge-header {
+  background: var(--paper3);
+  border-bottom: 1px solid var(--rule);
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.challenge-tag {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  padding: 2px 8px;
+  background: var(--accent);
+  color: white;
+  text-transform: uppercase;
+}
+
+.challenge-title {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+
+.challenge-body {
+  padding: 16px 20px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.challenge-col-label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.challenge-body p { font-size: 0.78rem; margin: 0; }
+
+/* ── Code ── */
+.code {
+  background: var(--ink);
+  color: #a8b8c8;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.7;
+  padding: 20px 24px;
+  margin: 16px 0;
+  overflow-x: auto;
+}
+
+.code .cm  { color: #3a5a48; }
+.code .kw  { color: #7ec8a0; }
+.code .str { color: #c8a07e; }
+.code .hl  { color: #7eafc8; }
+.code .acc { color: #c87e7e; }
+
+/* ── Architecture flow ── */
+.arch-flow {
+  background: var(--ink);
+  padding: 32px;
+  margin: 24px 0;
+  color: #a8b8c8;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 2;
+}
+
+.arch-node-r { color: #c87e7e; }
+.arch-node-g { color: #7ec8a0; }
+.arch-node-b { color: #7eafc8; }
+.arch-node-y { color: #c8b87e; }
+
+/* ── Tech table ── */
+.tech-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 20px 0;
+  font-size: 0.8rem;
+}
+
+.tech-table th {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.15em;
+  color: var(--text-muted);
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 2px solid var(--rule);
+  text-transform: uppercase;
+}
+
+.tech-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--text-dim);
+  vertical-align: top;
+}
+
+.tech-table td:first-child {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.tech-table tr:hover td { background: var(--paper2); }
+
+/* ── Decision callout ── */
+.decision {
+  background: var(--paper2);
+  border-top: 2px solid var(--accent3);
+  padding: 18px 22px;
+  margin: 20px 0;
+}
+
+.decision-label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.15em;
+  color: var(--accent3);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.decision p { font-size: 0.8rem; margin: 0; }
+
+/* ── Production section ── */
+.prod-item {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+  align-items: flex-start;
+}
+
+.prod-num {
+  font-family: var(--font-serif);
+  font-weight: 900;
+  font-size: 1.8rem;
+  color: var(--rule);
+  line-height: 1;
+  width: 36px;
+  flex-shrink: 0;
+}
+
+.prod-content h4 {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 0.85rem;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+
+.prod-content p { font-size: 0.78rem; margin: 0; }
+
+/* ── Footer ── */
+.report-footer {
+  border-top: 2px solid var(--ink);
+  padding-top: 32px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+}
+
+.footer-title {
+  font-family: var(--font-serif);
+  font-weight: 900;
+  font-size: 1.2rem;
+  color: var(--ink);
+}
+
+.footer-title em { color: var(--accent); font-style: italic; }
+
+.footer-meta {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-align: right;
+  line-height: 1.6;
+}
+
+/* ── Print ── */
+@media print {
+  body { background: white; }
+  .cover-stamp { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- COVER                                                                  -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="cover">
+    <div class="cover-stamp">
+      <div class="cover-stamp-text">LIVE<br>DEMO<br>READY</div>
+    </div>
+    <div class="cover-eyebrow">Project Report — Salesforce Agentforce Engineer</div>
+    <div class="cover-title">Nexus<em>360</em></div>
+    <div class="cover-subtitle">A production-grade AI agent for Salesforce CRM</div>
+    <div class="cover-meta">
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">Stack</div>
+        <div class="cover-meta-val">Python · LangGraph · React · TypeScript</div>
+      </div>
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">LLM</div>
+        <div class="cover-meta-val">Groq — Llama 3.3 70B</div>
+      </div>
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">Integration</div>
+        <div class="cover-meta-val">Live Salesforce Developer Org</div>
+      </div>
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">Status</div>
+        <div class="cover-meta-val">All 4 phases complete</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- TOC                                                                    -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="toc">
+    <div class="toc-title">Contents</div>
+    <div class="toc-item">
+      <span class="toc-num">01</span>
+      <a class="toc-text" href="#overview">Project Overview</a>
+      <span class="toc-dots"></span>
+    </div>
+    <div class="toc-item">
+      <span class="toc-num">02</span>
+      <a class="toc-text" href="#why">Why This Project</a>
+      <span class="toc-dots"></span>
+    </div>
+    <div class="toc-item">
+      <span class="toc-num">03</span>
+      <a class="toc-text" href="#architecture">Architecture</a>
+      <span class="toc-dots"></span>
+    </div>
+    <div class="toc-item">
+      <span class="toc-num">04</span>
+      <a class="toc-text" href="#phases">The 4-Phase Story</a>
+      <span class="toc-dots"></span>
+    </div>
+    <div class="toc-item">
+      <span class="toc-num">05</span>
+      <a class="toc-text" href="#decisions">Technical Decisions</a>
+      <span class="toc-dots"></span>
+    </div>
+    <div class="toc-item">
+      <span class="toc-num">06</span>
+      <a class="toc-text" href="#challenges">Challenges and Solutions</a>
+      <span class="toc-dots"></span>
+    </div>
+    <div class="toc-item">
+      <span class="toc-num">07</span>
+      <a class="toc-text" href="#observability">Observability</a>
+      <span class="toc-dots"></span>
+    </div>
+    <div class="toc-item">
+      <span class="toc-num">08</span>
+      <a class="toc-text" href="#production">Production Roadmap</a>
+      <span class="toc-dots"></span>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- 01 OVERVIEW                                                            -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="section" id="overview">
+    <div class="section-num">01</div>
+    <div class="section-title">Project Overview</div>
+
+    <p>Nexus360 is an AI agent that gives non-technical users natural language access to a live Salesforce CRM. A sales manager can type <em>"What is the health of Acme Corp?"</em> and receive a structured answer drawn from real Salesforce data. A support lead can say <em>"Create a high priority case for Globex Inc about database timeouts"</em> and it happens — the case is created in Salesforce, but only after the user explicitly approves the action.</p>
+
+    <p>The project is built across four deliberate phases, each solving a problem the previous phase exposed. It is not a prototype with mock data — every query runs live SOQL against a Salesforce Developer Org, every write operation touches real records, and every conversation turn is persisted to a production Supabase database.</p>
+
+    <div class="pullquote">
+      <p>The goal was never to build the most complex agent. The goal was to build one that demonstrates clear thinking about where agents go wrong and how to fix it — which is exactly what production agent engineering requires.</p>
+    </div>
+
+    <h3>What the agent can do</h3>
+    <table class="tech-table">
+      <tr>
+        <th>Capability</th>
+        <th>How it works</th>
+        <th>Source</th>
+      </tr>
+      <tr>
+        <td>get_account_health</td>
+        <td>Returns revenue, open cases, and pipeline for any account</td>
+        <td>Salesforce SOQL</td>
+      </tr>
+      <tr>
+        <td>list_open_cases</td>
+        <td>Lists all non-closed cases with priority and status</td>
+        <td>Salesforce SOQL</td>
+      </tr>
+      <tr>
+        <td>search_knowledge_base</td>
+        <td>Retrieves relevant policy and playbook excerpts</td>
+        <td>Qdrant RAG</td>
+      </tr>
+      <tr>
+        <td>update_opportunity_stage</td>
+        <td>Moves a deal to a new pipeline stage (requires approval)</td>
+        <td>Salesforce API</td>
+      </tr>
+      <tr>
+        <td>create_support_case</td>
+        <td>Logs a new support case (requires approval)</td>
+        <td>Salesforce API</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- 02 WHY                                                                 -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="section" id="why">
+    <div class="section-num">02</div>
+    <div class="section-title">Why This Project</div>
+
+    <p>The Salesforce Agentforce Engineer role sits at the intersection of three things most candidates can only talk about: building agents that use tools, connecting those agents to Salesforce, and understanding where agents break in production environments. Nexus360 is a working demonstration of all three.</p>
+
+    <p>It uses the actual Salesforce platform the interviewer works with every day. It shows a real agent failure — not a hypothetical one — and a real fix. It uses LangGraph, the current standard for production agent architecture. And it is built end-to-end: Python backend, React frontend, live data, full observability.</p>
+
+    <p>There is also a hardware constraint worth noting. This project runs on an i5-9300H with 8GB RAM and a GTX 1050. Every architectural decision that involves inference was made with this constraint in mind. Groq was chosen over local models precisely because it delivers 70B parameter quality at hardware-agnostic speed, which reflects a real production concern: cost and infrastructure efficiency in agentic systems.</p>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- 03 ARCHITECTURE                                                        -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="section" id="architecture">
+    <div class="section-num">03</div>
+    <div class="section-title">Architecture</div>
+
+    <p>The system has three layers: a React frontend that manages session state and renders the approval UI, a FastAPI backend that handles HTTP routing and request validation, and a LangGraph agent graph that orchestrates reasoning, tool use, validation, and memory.</p>
+
+    <div class="arch-flow">
+<span class="arch-node-b">React UI (TypeScript)</span><br>
+&nbsp;&nbsp;↓ POST /chat { message, session_id }<br>
+<span class="arch-node-g">FastAPI (Python)</span><br>
+&nbsp;&nbsp;↓ run_agent(message, session_id, approved)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="arch-node-y">Load history from Supabase → prepend to messages</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;↓<br>
+<span class="arch-node-r">LangGraph StateGraph</span><br>
+&nbsp;&nbsp;├── <span class="arch-node-r">reason</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ LLM decides which tool to call<br>
+&nbsp;&nbsp;├── <span class="arch-node-r">validate</span> &nbsp;&nbsp;&nbsp;&nbsp;→ sanitize inputs, classify READ / WRITE<br>
+&nbsp;&nbsp;├── <span class="arch-node-r">human_approval</span> → WRITE ops pause here<br>
+&nbsp;&nbsp;├── <span class="arch-node-r">execute</span> &nbsp;&nbsp;&nbsp;&nbsp;→ ToolNode runs the tool<br>
+&nbsp;&nbsp;├── <span class="arch-node-r">respond</span> &nbsp;&nbsp;&nbsp;&nbsp;→ LLM formats tool output<br>
+&nbsp;&nbsp;└── <span class="arch-node-r">save_memory</span> &nbsp;→ persist turn to Supabase<br>
+&nbsp;&nbsp;&nbsp;&nbsp;↓<br>
+<span class="arch-node-g">Tools</span><br>
+&nbsp;&nbsp;├── <span class="arch-node-b">Salesforce</span> (simple-salesforce → SOQL)<br>
+&nbsp;&nbsp;├── <span class="arch-node-b">Qdrant Cloud</span> (cosine similarity search)<br>
+&nbsp;&nbsp;└── <span class="arch-node-b">Supabase</span> (conversation persistence)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;↓<br>
+<span class="arch-node-y">LangSmith</span> (full trace of every run)
+    </div>
+
+    <h3>State management</h3>
+    <p>The agent graph is stateless between invocations — every call to <code>run_agent()</code> builds a fresh <code>State</code> object. Conversation continuity is achieved by loading the last 10 messages from Supabase and prepending them to the message list before the graph starts. This design means the agent scales horizontally without sticky sessions, and memory can be inspected or modified directly in the database.</p>
+
+    <div class="code">
+<span class="cm"># State shape — the contract between all 6 nodes</span>
+<span class="kw">class</span> State(TypedDict):
+    messages:     Annotated[list, add_messages]  <span class="cm"># append-only</span>
+    session_id:   str                             <span class="cm"># UUID from frontend</span>
+    pending_tool: dict | None                     <span class="cm"># write op awaiting approval</span>
+    approved:     bool | None                     <span class="cm"># None=waiting, True=go, False=block</span>
+    final_output: str                             <span class="cm"># the answer returned to the user</span>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- 04 PHASES                                                              -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="section" id="phases">
+    <div class="section-num">04</div>
+    <div class="section-title">The 4-Phase Story</div>
+
+    <p>Each phase is not a feature addition — it is a response to a specific failure or limitation identified in the previous phase. This progression is the core narrative of the project.</p>
+
+    <div class="phase-grid">
+      <div class="phase-card">
+        <div class="phase-card-num">Foundation</div>
+        <div class="phase-card-title">Real connections, real data</div>
+        <p>Salesforce Developer Org connected via simple-salesforce. Groq API verified. 8 accounts, 8 opportunities, 8 cases seeded. 4 SOQL-backed tool functions built and tested against live data. No mock data anywhere in the project from this point forward.</p>
+      </div>
+      <div class="phase-card">
+        <div class="phase-card-num">Phase 1</div>
+        <div class="phase-card-title">Naive agent — works, but unsafe</div>
+        <p>LangGraph prebuilt ReAct agent wired to all 4 tools. FastAPI /chat endpoint. React dark terminal UI. The agent correctly answers questions — but it also fires write operations immediately with no validation. Trailing punctuation breaks account lookups. No memory between turns.</p>
+      </div>
+      <div class="phase-card">
+        <div class="phase-card-num">Phase 2</div>
+        <div class="phase-card-title">Guardrails — custom LangGraph graph</div>
+        <p>Replaced prebuilt agent with a custom StateGraph. Tools split into READ and WRITE sets. Validate node sanitizes inputs and routes writes to human_approval. Frontend shows an amber approval card with the exact tool and arguments. User must click Approve before any Salesforce write executes.</p>
+      </div>
+      <div class="phase-card">
+        <div class="phase-card-num">Phase 3</div>
+        <div class="phase-card-title">Memory + RAG — stateful and grounded</div>
+        <p>Supabase stores every conversation turn keyed by UUID session_id. History loaded before each graph run — correct ordering guaranteed by loading in run_agent() rather than as a graph node. Qdrant Cloud stores 8 internal knowledge base documents. Agent correctly cites source — Salesforce or knowledge base — in every response.</p>
+      </div>
+    </div>
+
+    <div class="phase-card" style="margin-top:0">
+      <div class="phase-card-num">Phase 4</div>
+      <div class="phase-card-title">Polish — observable, documented, demo-ready</div>
+      <p>LangSmith tracing added — two env variables, zero code changes, full visibility into every node, token count, and latency. README written with full setup instructions. requirements.txt generated. Architecture diagram, interview talking points, demo script, and this report produced.</p>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- 05 DECISIONS                                                           -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="section" id="decisions">
+    <div class="section-num">05</div>
+    <div class="section-title">Technical Decisions</div>
+
+    <div class="decision">
+      <div class="decision-label">Decision — Groq over local models or OpenAI</div>
+      <p>Hardware constraint: GTX 1050 4GB VRAM cannot run a 70B model locally. OpenAI adds cost and vendor lock-in. Groq's free tier delivers llama-3.3-70b-versatile at inference speeds that feel instant, with a generous rate limit suitable for a demo. This is also a signal of production cost-awareness — Groq's architecture is purpose-built for LLM inference efficiency.</p>
+    </div>
+
+    <div class="decision">
+      <div class="decision-label">Decision — LangGraph over LangChain AgentExecutor</div>
+      <p>AgentExecutor is deprecated in LangChain 1.x. More importantly, AgentExecutor is a black box — you cannot inspect or control what happens between tool calls. LangGraph exposes every step as an explicit node with typed state. This is not just a technical upgrade — it is the difference between an agent you can reason about and one you cannot. For production systems this distinction is critical.</p>
+    </div>
+
+    <div class="decision">
+      <div class="decision-label">Decision — History loaded in run_agent(), not as a graph node</div>
+      <p>The first implementation loaded conversation history inside a load_memory graph node. This caused a subtle ordering bug: the current message was appended to initial_state first, then history was appended after it by the node. The LLM saw messages in reverse chronological order and answered the previous question instead of the current one. Moving history loading into run_agent() before the graph starts guarantees correct ordering: [history] + [current message], always.</p>
+    </div>
+
+    <div class="decision">
+      <div class="decision-label">Decision — Session IDs as UUIDs generated in the browser</div>
+      <p>Each React app load generates a UUID via <code>crypto.randomUUID()</code>. Same tab = same conversation. New tab = fresh memory. A NEW SESSION button regenerates the UUID without reloading the page. This is the right default for a CRM assistant: a sales rep opening the app in the morning should start clean. The production upgrade path is straightforward — link session_id to the authenticated Salesforce user ID so memory persists across devices.</p>
+    </div>
+
+    <div class="decision">
+      <div class="decision-label">Decision — Tools return plain strings, not structured dicts</div>
+      <p>The LLM receives tool output as text and reasons over it. Structured plain text (labelled fields, clear formatting) consistently produces better LLM reasoning and cleaner final answers than raw JSON dicts. It also makes the Observation step in the ReAct trace human-readable, which matters for debugging and for explaining agent behaviour in an interview.</p>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- 06 CHALLENGES                                                          -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="section" id="challenges">
+    <div class="section-num">06</div>
+    <div class="section-title">Challenges and Solutions</div>
+
+    <div class="challenge">
+      <div class="challenge-header">
+        <span class="challenge-tag">Dependency</span>
+        <span class="challenge-title">LangChain 1.x removed AgentExecutor from the public API</span>
+      </div>
+      <div class="challenge-body">
+        <div>
+          <div class="challenge-col-label">Problem</div>
+          <p>Attempted to downgrade LangChain to 0.2.x to restore AgentExecutor. This broke langchain-groq and langgraph which required langchain-core ≥1.2.8. Dependency conflict with no clean resolution.</p>
+        </div>
+        <div>
+          <div class="challenge-col-label">Solution</div>
+          <p>Stayed on LangChain 1.x and switched to langgraph.prebuilt.create_react_agent for Phase 1. This was ultimately the better outcome — it forced the Phase 2 architecture to be LangGraph-native from the start, which is what Salesforce uses in production Agentforce.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="challenge">
+      <div class="challenge-header">
+        <span class="challenge-tag">State</span>
+        <span class="challenge-title">unhashable type: 'SystemMessage' crash</span>
+      </div>
+      <div class="challenge-body">
+        <div>
+          <div class="challenge-col-label">Problem</div>
+          <p>LangGraph tried to merge state updates by hashing messages. SystemMessage objects are not hashable, causing a crash on every graph invocation when messages were defined as a plain list in State.</p>
+        </div>
+        <div>
+          <div class="challenge-col-label">Solution</div>
+          <p>Changed State to use <code>Annotated[list, add_messages]</code> which tells LangGraph to append rather than replace. Moved SystemMessage out of state entirely — it is now constructed locally inside each node and passed directly to llm.invoke(), never stored in state.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="challenge">
+      <div class="challenge-header">
+        <span class="challenge-tag">Logic</span>
+        <span class="challenge-title">Approval state immediately rejected on first call</span>
+      </div>
+      <div class="challenge-body">
+        <div>
+          <div class="challenge-col-label">Problem</div>
+          <p>The human_approval node treated approved=None as rejected (fell through to the else branch). Write operations were blocked immediately instead of pausing for user input. The approval card never appeared in the frontend.</p>
+        </div>
+        <div>
+          <div class="challenge-col-label">Solution</div>
+          <p>Added an explicit None check as the first branch: if approved is None, return without executing. The graph ends and returns pending_tool to the frontend. The user then calls /approve or /reject which re-runs the graph with the decision set.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="challenge">
+      <div class="challenge-header">
+        <span class="challenge-tag">Logic</span>
+        <span class="challenge-title">Validate node overwrote approved=True on re-run</span>
+      </div>
+      <div class="challenge-body">
+        <div>
+          <div class="challenge-col-label">Problem</div>
+          <p>When /approve re-ran the graph with approved=True, the validate node detected a WRITE tool and set approved=None again, overwriting the approval. The graph looped back to human_approval and blocked the action a second time.</p>
+        </div>
+        <div>
+          <div class="challenge-col-label">Solution</div>
+          <p>Added an early return at the top of validate: if state["approved"] is True, skip the write check and return approved=True immediately. This preserves the approval decision across the full graph run.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="challenge">
+      <div class="challenge-header">
+        <span class="challenge-tag">Memory</span>
+        <span class="challenge-title">Agent answered the previous question instead of the current one</span>
+      </div>
+      <div class="challenge-body">
+        <div>
+          <div class="challenge-col-label">Problem</div>
+          <p>History was loaded inside a load_memory graph node. The current HumanMessage was set in initial_state first, then history was appended after it by the node. The LLM received messages in reverse order and responded to the previous turn.</p>
+        </div>
+        <div>
+          <div class="challenge-col-label">Solution</div>
+          <p>Removed the load_memory node entirely. History is now loaded in run_agent() before initial_state is constructed: history messages are built first, then the current message is appended last. Correct ordering is guaranteed structurally, not at runtime.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="challenge">
+      <div class="challenge-header">
+        <span class="challenge-tag">API</span>
+        <span class="challenge-title">Qdrant .search() method removed in newer client versions</span>
+      </div>
+      <div class="challenge-body">
+        <div>
+          <div class="challenge-col-label">Problem</div>
+          <p>QdrantClient.search() was deprecated and removed in newer versions of the qdrant-client library. Collection creation and document upsert succeeded but every search call failed with AttributeError.</p>
+        </div>
+        <div>
+          <div class="challenge-col-label">Solution</div>
+          <p>Replaced .search() with .query_points() and appended .points to the result to extract the list. The new API is more explicit and consistent with Qdrant's direction toward a unified query interface.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- 07 OBSERVABILITY                                                       -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="section" id="observability">
+    <div class="section-num">07</div>
+    <div class="section-title">Observability</div>
+
+    <p>Observability was not part of the original plan and was identified as a gap during the Phase 4 audit. For any AI agent running in production, the ability to inspect what happened — which nodes ran, what the LLM received, how long each step took, which tools were called and with what inputs — is not optional. It is the difference between a system you can debug and one you cannot.</p>
+
+    <p>LangSmith tracing was added at the end of Phase 3. The implementation required two environment variables and zero code changes — LangChain automatically detects <code>LANGCHAIN_TRACING_V2=true</code> and sends a full execution trace to the configured project on every <code>graph.invoke()</code> call.</p>
+
+    <div class="code">
+<span class="cm"># .env — all that is needed for full LangSmith tracing</span>
+<span class="kw">LANGCHAIN_TRACING_V2</span>=<span class="str">true</span>
+<span class="kw">LANGCHAIN_API_KEY</span>=<span class="str">your-key</span>
+<span class="kw">LANGCHAIN_PROJECT</span>=<span class="str">nexus360</span>
+    </div>
+
+    <p>Every trace in LangSmith shows the full graph execution tree — which conditional edge was taken, the exact messages sent to the LLM at each node, tool call inputs and outputs, token usage per step, and end-to-end latency. This is the foundation for the next observability upgrade: setting latency thresholds, alerting on tool failures, and tracking which knowledge base documents are retrieved most frequently.</p>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- 08 PRODUCTION ROADMAP                                                  -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="section" id="production">
+    <div class="section-num">08</div>
+    <div class="section-title">Production Roadmap</div>
+
+    <p>Nexus360 in its current form is a fully functional local demo. The following changes would be required to deploy it as a production system.</p>
+
+    <div class="prod-item">
+      <div class="prod-num">1</div>
+      <div class="prod-content">
+        <h4>Authentication</h4>
+        <p>Add OAuth2 or JWT authentication to the FastAPI endpoints. Link session_id to the authenticated Salesforce user ID so memory persists across devices and is scoped per user. The Supabase conversations table would get a user_id column and Row Level Security enabled.</p>
+      </div>
+    </div>
+
+    <div class="prod-item">
+      <div class="prod-num">2</div>
+      <div class="prod-content">
+        <h4>Streaming responses</h4>
+        <p>Both FastAPI (Server-Sent Events) and LangGraph (astream()) support streaming. Adding it requires changing the /chat endpoint to return a StreamingResponse and updating the React frontend to consume the event stream. The user experience improvement is significant — responses appear token by token instead of all at once after a multi-second wait.</p>
+      </div>
+    </div>
+
+    <div class="prod-item">
+      <div class="prod-num">3</div>
+      <div class="prod-content">
+        <h4>Fuzzy account name matching</h4>
+        <p>Currently, "Acme Corp." (with a period) fails to match "Acme Corp" in Salesforce. The production fix is to embed all Salesforce account names into Qdrant at startup and perform a semantic similarity search before running the main SOQL query. This makes the agent robust to typos, abbreviations, and variations — which is how real users type.</p>
+      </div>
+    </div>
+
+    <div class="prod-item">
+      <div class="prod-num">4</div>
+      <div class="prod-content">
+        <h4>Persistent approval state</h4>
+        <p>Currently the pending_tool is held in React state — a browser refresh loses the pending approval. In production, pending write operations would be persisted to Supabase with a status field (pending / approved / rejected) so they survive page reloads and can be reviewed asynchronously.</p>
+      </div>
+    </div>
+
+    <div class="prod-item">
+      <div class="prod-num">5</div>
+      <div class="prod-content">
+        <h4>Embedding service as a separate microservice</h4>
+        <p>The SentenceTransformer model currently loads when the FastAPI process starts. In production, this would be a separate FastAPI service running on a GPU-enabled instance, exposing a /embed endpoint. The main agent calls it over HTTP. This prevents the embedding model from adding cold-start latency to every agent restart and allows it to scale independently.</p>
+      </div>
+    </div>
+
+    <div class="prod-item">
+      <div class="prod-num">6</div>
+      <div class="prod-content">
+        <h4>Salesforce Connected App with OAuth</h4>
+        <p>The current integration uses username + password + security token — acceptable for a dev org but not for production. A Salesforce Connected App with OAuth 2.0 JWT Bearer Flow is the correct pattern for server-to-server authentication in a production deployment.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- FOOTER                                                                 -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="report-footer">
+    <div>
+      <div class="footer-title">Nexus<em>360</em></div>
+      <div style="font-size:0.75rem; color:var(--text-muted); margin-top:4px; font-family:var(--font-mono)">All 4 phases complete — live demo available</div>
+    </div>
+    <div class="footer-meta">
+      Python · LangGraph · React · TypeScript<br>
+      Groq · Qdrant · Supabase · LangSmith<br>
+      Salesforce Developer Org
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
