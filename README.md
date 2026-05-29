@@ -26,6 +26,8 @@ Built as a demonstration of end-to-end agent architecture for the Salesforce Age
 | CRM | Salesforce (simple-salesforce) |
 | Vector DB | Qdrant Cloud |
 | Embeddings | sentence-transformers (all-MiniLM-L6-v2) |
+| Reranker | sentence-transformers CrossEncoder (ms-marco-MiniLM-L-6-v2) |
+| Keyword search | rank-bm25 (BM25Okapi) |
 | Memory | Supabase (PostgreSQL) |
 | Backend | Python 3.12, FastAPI |
 | Frontend | React 18, TypeScript, Vite |
@@ -41,10 +43,11 @@ nexus360/
 │   ├── .env                    # credentials — never commit
 │   ├── requirements.txt        # all Python dependencies
 │   ├── tools.py                # 4 Salesforce @tool functions
-│   ├── agent.py                # LangGraph graph — 6 nodes
+│   ├── agent.py                # LangGraph graph — 7 nodes, dynamic prompts, token efficiency
 │   ├── main.py                 # FastAPI — /chat /approve /reject /health
 │   ├── memory.py               # Supabase conversation memory
-│   ├── knowledge_base.py       # Qdrant RAG — setup, seed, search
+│   ├── knowledge_base.py       # Qdrant RAG — hybrid search + reranking + query rewriting
+│   ├── eval.py                 # RAG eval suite — retrieval precision + answer quality
 │   ├── seed_data.py            # Salesforce test data (8 accounts/opps/cases)
 │   ├── test_connections.py     # verify Salesforce + Groq connections
 │   ├── test_tools.py           # verify all 4 tools against live SF data
@@ -160,13 +163,28 @@ LangGraph Graph
   ├── validate      → sanitize inputs, classify READ vs WRITE
   ├── human_approval→ WRITE ops pause here, wait for /approve or /reject
   ├── execute       → ToolNode runs the Salesforce or RAG tool
-  ├── respond       → LLM formats tool output into clean answer
+  ├── track_tools   → records which tools ran this turn
+  ├── respond       → LLM formats output (or deterministic template for Salesforce reads)
   └── save_memory   → persist turn to Supabase
      ↓
 FastAPI returns JSON { output, pending_tool, needs_approval, error }
      ↓
 React renders answer OR approval card
 ```
+
+### RAG Pipeline
+
+```
+User query
+  → LLM rewrites query for better retrieval
+  → Dense search (Qdrant cosine similarity)
+  → BM25 keyword search (rank-bm25)
+  → Reciprocal Rank Fusion (combines both rankings)
+  → Cross-encoder reranking (ms-marco-MiniLM-L-6-v2)
+  → Top 3 results injected into LLM context
+```
+
+**Eval results:** Precision@1: 77.8% | Precision@3: 100% | Answer quality: 4.78/5
 
 ### Tools
 
@@ -202,6 +220,18 @@ This project was built in 4 deliberate phases to demonstrate progressive improve
 | Phase 4 | README, architecture diagram, interview prep | Production-ready documentation |
 
 ---
+
+## Eval
+
+Run the RAG eval suite to measure retrieval and answer quality:
+```bash
+python eval.py
+```
+
+Outputs:
+- Precision@1 and Precision@3 for retrieval
+- LLM-as-judge answer quality score (1-5) per question
+- Weak spot detection — flags retrieval misses and low quality answers
 
 ## Known Limitations
 

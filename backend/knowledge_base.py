@@ -1,24 +1,29 @@
 # ── Imports ───────────────────────────────────────────────────────────────────
 import os
+import math
 from dotenv import load_dotenv
+
 from qdrant_client import QdrantClient
-from qdrant_client.models import (
-    Distance,
-    VectorParams,
-    PointStruct,
-)
-from sentence_transformers import SentenceTransformer
+from qdrant_client.models import Distance, VectorParams, PointStruct
+from sentence_transformers import SentenceTransformer, CrossEncoder
+from rank_bm25 import BM25Okapi
+from langchain_groq import ChatGroq
+from langchain_core.messages import HumanMessage, SystemMessage
 
 load_dotenv()
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-COLLECTION_NAME = "nexus360_knowledge"
+COLLECTION_NAME  = "nexus360_knowledge"
 EMBEDDING_MODEL  = "all-MiniLM-L6-v2"   # small, fast, 384 dimensions
+RERANK_MODEL     = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+
 VECTOR_SIZE      = 384
+TOP_K_RETRIEVAL  = 6
+TOP_K_FINAL      = 3
+RERANK_THRESHOLD = 0.0 # can be negative
 
 
-# ── Clients ───────────────────────────────────────────────────────────────────
-# Both created once at module level and reused
+# ── Clients & Models───────────────────────────────────────────────────────────
 
 def _get_qdrant() -> QdrantClient:
     url     = os.getenv("QDRANT_URL")
@@ -27,18 +32,31 @@ def _get_qdrant() -> QdrantClient:
         raise EnvironmentError("QDRANT_URL or QDRANT_API_KEY not set in .env")
     return QdrantClient(url=url, api_key=api_key)
 
+def _get_llm() -> ChatGroq:
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        raise EnvironmentError("GROQ_API_KEY not set in .env")
+    return ChatGroq(
+        api_key=api_key,
+        model="llama-3.3-70b-versatile",
+        temperature=0,
+        max_tokens=128,  #query rewriting needs very few tokens
+    )
+
 # SentenceTransformer downloads the model on first run (~90MB, cached after)
 print("Loading embedding model...")
 embedder = SentenceTransformer(EMBEDDING_MODEL)
 print("✅ Embedding model loaded")
 
+print("Loading reranker model...")
+reranker = CrossEncoder(RERANK_MODEL)
+print(" Rerank loaded")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
-# INTERNAL DOCUMENTS
+# SECTION 2 - DOCUMENTS
 # ══════════════════════════════════════════════════════════════════════════════
-# These are fake but realistic internal docs — playbooks, SLAs, policies.
-# In a real company these would be pulled from Confluence, Notion, or Google Drive.
-# Each doc has a title, content, and category for filtering.
+
 
 DOCUMENTS = [
     {
@@ -263,42 +281,185 @@ def seed_documents() -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# QUERY REWRITING
+# ══════════════════════════════════════════════════════════════════════════════
+def rewrite_query(query: str) -> str:
+    """
+    Rewrite a natural language query into a precise search query
+    optimised for retrieving relevant policy and playbook documents.
+    """
+    llm = _get_llm()
+    messages = [
+        SystemMessage(content="""You are a search query optimizer.
+Rewrite the user's question into a precise, keyword-rich search query
+for retrieving relevant documents from a CRM knowledge base.
+The knowledge base contains: escalation policies, SLA definitions,
+account health scoring, renewal playbooks, onboarding checklists,
+support case best practices, opportunity stage definitions, data privacy policies.
+Return ONLY the rewritten query. No explanation. No punctuation at the end."""),
+        HumanMessage(content=f"Rewrite this query: {query}")
+    ]
+    response = llm.invoke(messages)
+    rewritten = response.content.strip()
+    print(f"🔄 Query rewritten: '{query}' → '{rewritten}'")
+    return rewritten
+
+
+# BM25 INDEX
+_bm25_corpus   = [doc["content"].lower().split() for doc in DOCUMENTS]
+_bm25_index    = BM25Okapi(_bm25_corpus)
+_bm25_doc_ids  = [doc["id"] for doc in DOCUMENTS]
+ 
+ 
+def _bm25_search(query: str, top_k: int) -> list[dict]:
+    """
+    BM25 keyword search over the local document corpus.
+    Returns top_k documents with their BM25 scores.
+    """
+    tokens  = query.lower().split()
+    scores  = _bm25_index.get_scores(tokens)
+ 
+    # Pair each doc with its score and sort descending
+    ranked  = sorted(
+        zip(_bm25_doc_ids, scores),
+        key=lambda x: x[1],
+        reverse=True
+    )[:top_k]
+ 
+    results = []
+    for doc_id, score in ranked:
+        doc = next(d for d in DOCUMENTS if d["id"] == doc_id)
+        results.append({
+            "id":      doc_id,
+            "title":   doc["title"],
+            "content": doc["content"],
+            "score":   float(score),
+            "source":  "bm25",
+        })
+    return results
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 6 — DENSE SEARCH (Qdrant)
+# ══════════════════════════════════════════════════════════════════════════════
+ 
+def _dense_search(query: str, top_k: int) -> list[dict]:
+    """
+    Dense vector search using Qdrant + cosine similarity.
+    """
+    client = _get_qdrant()
+    vector = embedder.encode(query).tolist()
+ 
+    results = client.query_points(
+        collection_name=COLLECTION_NAME,
+        query=vector,
+        limit=top_k,
+    ).points
+ 
+    return [
+        {
+            "id":      hit.id,
+            "title":   hit.payload["title"],
+            "content": hit.payload["content"],
+            "score":   hit.score,
+            "source":  "dense",
+        }
+        for hit in results
+    ]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 7 — RECIPROCAL RANK FUSION
+# ══════════════════════════════════════════════════════════════════════════════
+def _reciprocal_rank_fusion(
+    dense_results: list[dict],
+    bm25_results:  list[dict],
+    k: int = 60,
+) -> list[dict]:
+    """
+    Merge dense and BM25 results using Reciprocal Rank Fusion.
+    Returns a deduplicated, re-ranked list of documents.
+    """
+    scores: dict[int, float] = {}
+    docs:   dict[int, dict]  = {}
+ 
+    for rank, doc in enumerate(dense_results):
+        doc_id          = doc["id"]
+        scores[doc_id]  = scores.get(doc_id, 0) + 1 / (k + rank + 1)
+        docs[doc_id]    = doc
+ 
+    for rank, doc in enumerate(bm25_results):
+        doc_id          = doc["id"]
+        scores[doc_id]  = scores.get(doc_id, 0) + 1 / (k + rank + 1)
+        docs[doc_id]    = doc
+ 
+    # Sort by fused score descending
+    sorted_ids = sorted(scores, key=lambda x: scores[x], reverse=True)
+    return [
+        {**docs[doc_id], "rrf_score": scores[doc_id]}
+        for doc_id in sorted_ids
+    ]
+
+
+def _rerank(query: str, candidates: list[dict]) -> list[dict]:
+    """
+    Rerank candidates using a cross-encoder model.
+    Returns candidates sorted by cross-encoder relevance score.
+    """
+    pairs  = [[query, doc["content"]] for doc in candidates]
+    scores = reranker.predict(pairs)
+ 
+    for doc, score in zip(candidates, scores):
+        doc["rerank_score"] = float(score)
+ 
+    reranked = sorted(candidates, key=lambda x: x["rerank_score"], reverse=True)
+ 
+    print(f"📊 Reranking scores:")
+    for doc in reranked[:TOP_K_FINAL]:
+        print(f"   [{doc['rerank_score']:+.3f}] {doc['title']}")
+ 
+    return reranked[:TOP_K_FINAL]
+# ══════════════════════════════════════════════════════════════════════════════
 # SEARCH
 # ══════════════════════════════════════════════════════════════════════════════
-# The function the agent calls at query time.
-# Embeds the query, finds the top-k most similar documents, returns them.
 
-def search_knowledge_base(query: str, top_k: int = 3) -> str:
+
+def search_knowledge_base(query: str) -> str:
     """
-    Search the internal knowledge base for documents relevant to the query.
-    Use this when asked about policies, playbooks, SLAs, or internal processes.
-
+    Search the internal knowledge base using hybrid search with reranking.
+    Use this when asked about policies, SLAs, escalation procedures,
+    renewal playbooks, onboarding, opportunity stages, or data privacy rules.
+ 
     Args:
         query: The question or topic to search for.
-        top_k: Number of results to return (default 3).
-
-    Returns:
-        Formatted string of the most relevant document excerpts.
     """
     try:
-        client  = _get_qdrant()
-        vector  = embedder.encode(query).tolist()
-        results = client.query_points(
-            collection_name=COLLECTION_NAME,
-            query=vector,
-            limit=top_k,
-        ).points
-
-        if not results:
-            return "No relevant documents found in the knowledge base."
-
+        # Step 1 — Rewrite the query for better retrieval
+        search_query = rewrite_query(query)
+ 
+        # Step 2 — Dense search (semantic)
+        dense_results = _dense_search(search_query, top_k=TOP_K_RETRIEVAL)
+ 
+        # Step 3 — BM25 search (keyword)
+        bm25_results  = _bm25_search(search_query, top_k=TOP_K_RETRIEVAL)
+ 
+        # Step 4 — Fuse rankings with RRF
+        fused = _reciprocal_rank_fusion(dense_results, bm25_results)
+ 
+        if not fused:
+            return "No documents found in the knowledge base."
+ 
+        # Step 5 — Cross-encoder rerank
+        reranked = _rerank(query, fused)  # use original query for reranking
+ 
+        # Step 6 — Format output
         output = f"Knowledge base results for '{query}':\n\n"
-        for i, hit in enumerate(results, 1):
-            output += f"[{i}] {hit.payload['title']} (score: {hit.score:.2f})\n"
-            output += f"{hit.payload['content'].strip()}\n\n"
-
+        for i, doc in enumerate(reranked, 1):
+            output += f"[{i}] {doc['title']} (relevance: {doc['rerank_score']:+.3f})\n"
+            output += f"{doc['content'].strip()}\n\n"
+ 
         return output.strip()
-
+ 
     except Exception as e:
         return f"Knowledge base search failed: {e}"
 
@@ -308,20 +469,23 @@ def search_knowledge_base(query: str, top_k: int = 3) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    print("\n── Setting up collection ────────────────────────────")
     setup_collection()
-
-    print("\n── Seeding documents ────────────────────────────────")
     seed_documents()
-
-    print("\n── Test search 1: escalation policy ─────────────────")
-    result = search_knowledge_base("what is the escalation policy for high priority cases?")
-    print(result[:500] + "...")
-
-    print("\n── Test search 2: renewal process ───────────────────")
-    result = search_knowledge_base("what should I do 30 days before a renewal?")
-    print(result[:500] + "...")
-
-    print("\n── Test search 3: opportunity stages ────────────────")
-    result = search_knowledge_base("what does Closed Won mean?")
-    print(result[:500] + "...")
+ 
+    tests = [
+        "what is the escalation policy for high priority cases?",
+        "what should I do 30 days before a renewal?",
+        "what does Closed Won mean?",              # previously scored 0.20 — the weak case
+        "how do I create a good support case?",
+        "what are the SLA response times?",
+    ]
+ 
+    for query in tests:
+        print(f"\n{'═'*60}")
+        print(f"QUERY: {query}")
+        print('═'*60)
+        result = search_knowledge_base(query)
+        # Print just the titles and scores, not full content
+        for line in result.split('\n'):
+            if line.startswith('[') or line.startswith('Knowledge'):
+                print(line)

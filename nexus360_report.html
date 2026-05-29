@@ -557,6 +557,11 @@ h3 {
     </div>
     <div class="toc-item">
       <span class="toc-num">08</span>
+      <a class="toc-text" href="#improvements">Production Improvements</a>
+      <span class="toc-dots"></span>
+    </div>
+    <div class="toc-item">
+      <span class="toc-num">09</span>
       <a class="toc-text" href="#production">Production Roadmap</a>
       <span class="toc-dots"></span>
     </div>
@@ -876,7 +881,73 @@ h3 {
   </div>
 
   <!-- ══════════════════════════════════════════════════════════════════════ -->
-  <!-- 08 PRODUCTION ROADMAP                                                  -->
+  <!-- 08 PRODUCTION IMPROVEMENTS                                             -->
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <div class="section" id="improvements">
+    <div class="section-num">08</div>
+    <div class="section-title">Production Improvements</div>
+
+    <p>After completing the 4-phase architecture, four additional improvements were made in response to a critical evaluation of what separated the demo from a production system. Each improvement addresses a specific weakness identified through honest self-audit.</p>
+
+    <h3>1. Hybrid Search with Reranking</h3>
+    <p>The naive RAG implementation used cosine similarity alone — embedding the query, finding the closest vectors, returning the top results. This approach has two well-known failure modes: it misses exact keyword matches that are highly relevant, and it has no way to verify that retrieved documents actually answer the question.</p>
+
+    <p>The production pipeline has three stages. First, query rewriting — the LLM rewrites the user's natural language query into search-optimised terms before it hits the index. Second, hybrid search — Qdrant dense search is combined with BM25 keyword search using Reciprocal Rank Fusion, which merges rankings without requiring score normalisation. Third, cross-encoder reranking — a ms-marco-MiniLM-L-6-v2 cross-encoder scores each (query, document) pair jointly, providing a much more accurate relevance signal than independent embedding comparison.</p>
+
+    <div class="code">
+<span class="cm"># Full hybrid RAG pipeline</span>
+rewritten  = <span class="kw">rewrite_query</span>(user_query)          <span class="cm"># LLM rewrites for retrieval</span>
+dense      = <span class="kw">qdrant_search</span>(rewritten, k=6)       <span class="cm"># semantic similarity</span>
+bm25       = <span class="kw">bm25_search</span>(rewritten, k=6)         <span class="cm"># keyword matching</span>
+fused      = <span class="kw">reciprocal_rank_fusion</span>(dense, bm25)  <span class="cm"># combine rankings</span>
+reranked   = <span class="kw">cross_encoder_rerank</span>(query, fused)   <span class="cm"># final relevance scoring</span>
+    </div>
+
+    <h3>2. Eval Framework</h3>
+    <p>An eval suite was built with 9 hand-crafted question/answer pairs covering all 8 knowledge base documents plus edge cases. Three metrics are measured: Precision@1 (correct document ranked first), Precision@3 (correct document in top 3), and LLM-as-judge answer quality (1-5 score based on expected facts).</p>
+
+    <table class="tech-table">
+      <tr>
+        <th>Metric</th>
+        <th>Score</th>
+        <th>Notes</th>
+      </tr>
+      <tr>
+        <td>Precision@1</td>
+        <td>77.8% (7/9)</td>
+        <td>2 misses both involve "Closed Won" — term appears in two documents</td>
+      </tr>
+      <tr>
+        <td>Precision@3</td>
+        <td>100% (9/9)</td>
+        <td>Correct document always retrieved — LLM always has right information</td>
+      </tr>
+      <tr>
+        <td>Answer quality</td>
+        <td>4.78/5</td>
+        <td>Score distribution: [4, 4, 5, 5, 5, 5, 5, 5, 5]</td>
+      </tr>
+    </table>
+
+    <p>The eval suite runs in under 90 seconds and produces a weak spot report flagging retrieval misses and low quality answers. It is the regression test that runs before any change to the RAG pipeline.</p>
+
+    <h3>3. Dynamic Prompt Context Injection</h3>
+    <p>A static system prompt gives the LLM no domain context about what tool outputs mean. When Salesforce returns an opportunity stage like "Negotiation/Review" the LLM does not know the probability that implies. When the knowledge base returns a document with a low reranking score the LLM does not know to caveat its answer.</p>
+
+    <p>A <code>build_system_prompt()</code> function was built that combines a base prompt with tool-specific context blocks injected based on which tools were called that turn. Account health queries inject CRM interpretation rules. Knowledge base queries inject document citation instructions and relevance score guidance. Multi-tool queries inject all relevant blocks. The LLM receives exactly the context it needs for what it is about to do.</p>
+
+    <h3>4. Token Efficiency</h3>
+    <p>The original respond node made an LLM call on every single response — including structured Salesforce data that was already readable without summarisation. A routing decision was added: if the response involves only Salesforce read tools and no knowledge base results, skip the LLM and return a deterministic template. This saves 300-500 tokens per Salesforce-only query.</p>
+
+    <div class="decision">
+      <div class="decision-label">Principle — keep the deterministic parts deterministic</div>
+      <p>LLM calls are expensive and non-deterministic. The right approach is to use the LLM only where language understanding is genuinely required — knowledge base summarisation, multi-tool synthesis, ambiguous formatting decisions. Structured data with a known format does not need an LLM to reformat it. Applying this principle consistently across an agent system reduces cost, reduces latency, and increases reliability.</p>
+    </div>
+
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════ -->
+  <!-- 09 PRODUCTION ROADMAP                                                  -->
   <!-- ══════════════════════════════════════════════════════════════════════ -->
   <div class="section" id="production">
     <div class="section-num">08</div>

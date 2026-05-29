@@ -20,6 +20,7 @@ simple-salesforce
 # ── Vector DB (RAG) ───────────────────────────────────────────────────────────
 qdrant-client
 sentence-transformers
+rank-bm25
 
 # ── Memory ────────────────────────────────────────────────────────────────────
 supabase

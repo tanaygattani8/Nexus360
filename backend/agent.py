@@ -8,7 +8,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langchain_groq import ChatGroq
 
@@ -26,9 +26,8 @@ load_dotenv()
 
 import langchain
 langchain.debug = False
-# ══════════════════════════════════════════════════════════════════════════════
+
 # SECTION 1 — TOOLS
-# ══════════════════════════════════════════════════════════════════════════════
 
 @tool
 def search_knowledge_base(query: str) -> str:
@@ -50,12 +49,7 @@ ALL_TOOLS   = READ_TOOLS + WRITE_TOOLS
 WRITE_TOOL_NAMES = {t.name for t in WRITE_TOOLS}
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 # SECTION 2 — STATE
-# ══════════════════════════════════════════════════════════════════════════════
-# load_memory node is REMOVED — history is now loaded in run_agent() directly
-# before building initial_state. This guarantees correct message ordering:
-# [history...] + [current message] → LLM always sees latest message last.
 
 class State(TypedDict):
     messages:     Annotated[list, add_messages]
@@ -63,23 +57,139 @@ class State(TypedDict):
     pending_tool: dict | None
     approved:     bool | None
     final_output: str
+    tools_used:   list[str]
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 3 — LLM
-# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 3 - PROMPTS
 
-SYSTEM_PROMPT = """You are Nexus360, an AI assistant with live access to Salesforce data
+BASE_PROMPT = """You are Nexus360, an AI assistant with live access to Salesforce CRM data
 and an internal knowledge base of company policies and playbooks.
-
-When answering:
+ 
+Core rules:
 - Use Salesforce tools for live account, case, and opportunity data.
-- Use search_knowledge_base for questions about policies, SLAs, escalation procedures,
-  renewal playbooks, onboarding, or internal processes.
-- Use both if needed — e.g. check account health AND look up the renewal playbook.
-- Be concise and always cite your source: (Source: Salesforce) or (Source: knowledge base, <doc title>).
-"""
+- Use search_knowledge_base for policies, SLAs, playbooks, and internal processes.
+- Use both tools when a question requires live data AND policy guidance.
+- Always cite your source: (Source: Salesforce) or (Source: knowledge base, <doc title>).
+- Be concise. Lead with the answer, follow with supporting detail."""
 
+TOOL_CONTEXT = {
+    "get_account_health": """
+SALESFORCE ACCOUNT CONTEXT:
+- AnnualRevenue is in USD.
+- Open Cases count includes all non-Closed cases (New, In Progress, Escalated).
+- Opportunity StageName values: Prospecting, Qualification, Needs Analysis,
+  Value Proposition, Id. Decision Makers, Perception Analysis,
+  Proposal/Price Quote, Negotiation/Review, Closed Won, Closed Lost.
+- CloseDate is the expected contract close date, not a guarantee.
+- Interpret account health: 0 open High cases = healthy, 1-2 = at risk, 3+ = critical.
+- If AnnualRevenue is null, the account has not reported revenue.""",
+ 
+    "list_open_cases": """
+SALESFORCE CASE CONTEXT:
+- Priority levels: High (production impact), Medium (workaround exists), Low (cosmetic/question).
+- Status flow: New → In Progress → Escalated → Waiting on Customer → Closed.
+- High priority cases open >24h should be escalated per policy.
+- CreatedDate is in UTC. Convert to local time when communicating to users.
+- If no open cases found, the account is in good standing on support.""",
+ 
+    "search_knowledge_base": """
+KNOWLEDGE BASE CONTEXT:
+- Documents cover: escalation policy, SLA definitions, account health scoring,
+  renewal playbook, onboarding checklist, support case best practices,
+  opportunity stage definitions, data privacy policy.
+- Relevance scores: above +3 = high confidence, 0 to +3 = moderate, below 0 = weak match.
+- If the retrieved document has a weak relevance score, caveat your answer.
+- Always name the specific document you are drawing from.""",
+ 
+    "update_opportunity_stage": """
+SALESFORCE OPPORTUNITY STAGE CONTEXT:
+- Valid stage progression: Prospecting → Qualification → Needs Analysis →
+  Value Proposition → Id. Decision Makers → Perception Analysis →
+  Proposal/Price Quote → Negotiation/Review → Closed Won / Closed Lost.
+- Skipping stages (e.g. Qualification → Closed Won) flags a data quality issue.
+- Closed Lost requires a Loss Reason to be filled in the record.
+- Stage changes are immediately visible in Salesforce pipeline reports.""",
+ 
+    "create_support_case": """
+SALESFORCE CASE CREATION CONTEXT:
+- Priority must match business impact: High = production down or data loss risk,
+  Medium = broken with workaround, Low = cosmetic or question.
+- Subject line should be specific: 'Login failure after SSO update' not 'Login issue'.
+- New cases start in 'New' status and must be moved to 'In Progress' within 2 hours.
+- The case is immediately visible to the account's CSM in Salesforce.""",
+}
+
+def build_system_prompt(tools_used: list[str]) -> str:
+    """
+    Build a dynamic system prompt by combining the base prompt with
+    context blocks for each tool that was called this turn.
+ 
+    Args:
+        tools_used: List of tool names called during this turn.
+ 
+    Returns:
+        Complete system prompt string.
+    """
+    prompt = BASE_PROMPT
+ 
+    # Inject context for each tool that was used
+    for tool_name in set(tools_used):   
+        if tool_name in TOOL_CONTEXT:
+            prompt += f"\n{TOOL_CONTEXT[tool_name]}"
+ 
+    return prompt
+
+
+# SECTION 4 — TOKEN EFFICIENCY HELPERS
+ 
+def _needs_llm_response(tools_used: list[str]) -> bool:
+    """
+    Returns True only when the LLM is genuinely needed to format the response.
+    Returns False when a deterministic template is sufficient.
+    """
+    # KB search always needs LLM — policy docs need summarisation
+    if "search_knowledge_base" in tools_used:
+        return True
+    # Multiple different tools → synthesis required
+    if len(set(tools_used)) > 1:
+        return True
+    # Pure Salesforce reads and write confirmations → use template
+    return False
+ 
+ 
+def _format_template_response(state: State) -> dict:
+    """
+    Format a response using a deterministic template when LLM is not needed.
+    Extracts the last ToolMessage content and returns it directly with a source tag.
+    """
+    # Find the last ToolMessage — that's the tool's raw output
+    tool_messages = [m for m in state["messages"] if isinstance(m, ToolMessage)]
+ 
+    if not tool_messages:
+        return {"final_output": "No tool result available."}
+ 
+    tool_content = tool_messages[-1].content
+    tools_used   = state.get("tools_used", [])
+ 
+    # Determine source label
+    write_tools = {"update_opportunity_stage", "create_support_case"}
+    if any(t in write_tools for t in tools_used):
+        source = "Salesforce (write confirmed)"
+    else:
+        source = "Salesforce"
+ 
+    # Return the raw tool output with source tag appended
+    # The tool output is already well-formatted plain text
+    final = f"{tool_content.strip()}\n\n(Source: {source})"
+ 
+    print(f"⚡ Template response used — skipped LLM call")
+    return {
+        "final_output": final,
+        "messages":     [],   # no new AIMessage to add
+    }
+
+
+# SECTION 4 — LLM
 
 def _build_llm() -> ChatGroq:
     api_key = os.getenv("GROQ_API_KEY")
@@ -96,13 +206,10 @@ llm            = _build_llm()
 llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 # SECTION 4 — NODES
-# ══════════════════════════════════════════════════════════════════════════════
-
-# ── Node 1: REASON ────────────────────────────────────────────────────────────
+# Node 1: REASON
 def reason(state: State) -> dict:
-    messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
+    messages = [SystemMessage(content=BASE_PROMPT)] + state["messages"]
     response = llm_with_tools.invoke(messages)
 
     pending = None
@@ -116,7 +223,7 @@ def reason(state: State) -> dict:
     }
 
 
-# ── Node 2: VALIDATE ──────────────────────────────────────────────────────────
+# Node 2: VALIDATE
 def validate(state: State) -> dict:
     tool_call = state["pending_tool"]
 
@@ -147,7 +254,7 @@ def validate(state: State) -> dict:
     return {"approved": True, "pending_tool": {"name": tool_name, "args": args}}
 
 
-# ── Node 3: HUMAN APPROVAL ────────────────────────────────────────────────────
+# Node 3: HUMAN APPROVAL
 def human_approval(state: State) -> dict:
     tool_call = state["pending_tool"]
     print(f"\n🛑 HUMAN APPROVAL REQUIRED")
@@ -170,32 +277,56 @@ def human_approval(state: State) -> dict:
     }
 
 
-# ── Node 4: EXECUTE ───────────────────────────────────────────────────────────
+# Node 4: EXECUTE
 tool_node = ToolNode(ALL_TOOLS)
 
+# Node 5: TRACK TOOLS
+def track_tools(state: State) -> dict:
+    """
+    Scan the message history for tool calls made this turn
+    and record their names in state["tools_used"].
+    """
+    tools_used = []
+    for msg in state["messages"]:
+        # AIMessage with tool_calls = the LLM decided to call a tool
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            for tc in msg.tool_calls:
+                tools_used.append(tc["name"])
+ 
+    print(f"🔧 Tools used this turn: {tools_used}")
+    return {"tools_used": tools_used}
 
-# ── Node 5: RESPOND ───────────────────────────────────────────────────────────
+
+# Node 6: RESPOND
 def respond(state: State) -> dict:
-    messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
-    response = llm.invoke(messages)
-    return {
-        "messages":     [response],
-        "final_output": response.content,
-    }
+    """
+    UPDATED — smart routing:
+    - If LLM is genuinely needed (KB search or multi-tool): make the LLM call
+    - Otherwise: use a deterministic template — saves 300-500 tokens per query
+    """
+    tools_used = state.get("tools_used", [])
+ 
+    if _needs_llm_response(tools_used):
+        print(f"🧠 LLM response — tools require synthesis: {tools_used}")
+        system_prompt = build_system_prompt(tools_used)
+        messages      = [SystemMessage(content=system_prompt)] + state["messages"]
+        response      = llm.invoke(messages)
+        return {
+            "messages":     [response],
+            "final_output": response.content,
+        }
+    else:
+        return _format_template_response(state)
 
 
-# ── Node 6: SAVE MEMORY ───────────────────────────────────────────────────────
-# Saves ONLY the current turn — not the full history (that's already in Supabase).
-# We identify the current user message as the last HumanMessage in state.
-
+# Node 6: SAVE MEMORY 
 def save_memory(state: State) -> dict:
     session_id = state.get("session_id", "default")
 
     # The current user message is the last HumanMessage in state
     human_messages = [m for m in state["messages"] if isinstance(m, HumanMessage)]
     if human_messages:
-        current_user_msg = human_messages[-1].content
-        save_message(session_id, "user", current_user_msg)
+        save_message(session_id, "user", human_messages[-1].content)
 
     # Save agent's final answer
     if state.get("final_output"):
@@ -205,9 +336,7 @@ def save_memory(state: State) -> dict:
     return {}
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 5 — ROUTING
-# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 6 — ROUTING
 
 def after_reason(state: State) -> Literal["validate", "respond"]:
     if state["pending_tool"]:
@@ -227,11 +356,7 @@ def after_approval(state: State) -> Literal["execute", "__end__"]:
     return "__end__"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 6 — BUILD THE GRAPH
-# ══════════════════════════════════════════════════════════════════════════════
-# load_memory is no longer a node — history is loaded in run_agent() before
-# the graph starts. Entry point is now "reason" directly.
+# SECTION 7 — BUILD THE GRAPH
 
 def build_graph():
     graph = StateGraph(State)
@@ -240,6 +365,7 @@ def build_graph():
     graph.add_node("validate",       validate)
     graph.add_node("human_approval", human_approval)
     graph.add_node("execute",        tool_node)
+    graph.add_node("track_tools", track_tools)
     graph.add_node("respond",        respond)
     graph.add_node("save_memory",    save_memory)
 
@@ -260,19 +386,15 @@ def build_graph():
         "__end__":  END,
     })
 
-    graph.add_edge("execute",     "respond")
+    graph.add_edge("execute",     "track_tools")
+    graph.add_edge("track_tools", "respond")
     graph.add_edge("respond",     "save_memory")
     graph.add_edge("save_memory", END)
 
     return graph.compile()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SECTION 7 — PUBLIC INTERFACE
-# ══════════════════════════════════════════════════════════════════════════════
-# History is loaded HERE before the graph runs — guarantees correct order:
-# [old msg 1, old msg 2, ..., current message]
-# The LLM always sees the current message last, which is what it expects.
+# SECTION 8 — PUBLIC INTERFACE
 
 def run_agent(
     user_message: str,
@@ -281,7 +403,7 @@ def run_agent(
 ) -> dict:
     graph = build_graph()
 
-    # ── Load conversation history from Supabase ────────────────────────────────
+    # Load conversation history from Supabase
     history     = load_history(session_id, limit=10)
     all_messages = []
 
@@ -297,13 +419,14 @@ def run_agent(
     if len(all_messages) > 1:
         print(f"📚 Loaded {len(all_messages) - 1} messages from memory for session '{session_id}'")
 
-    # ── Build initial state ────────────────────────────────────────────────────
+    # Build initial state 
     initial_state: State = {
         "messages":     all_messages,
         "session_id":   session_id,
         "pending_tool": None,
         "approved":     approved,
         "final_output": "",
+        "tools_used":   [],
     }
 
     try:
@@ -323,27 +446,27 @@ def run_agent(
         }
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 # SMOKE TESTS  —  python agent.py
-# ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    TEST_SESSION = "smoke-test-002"
-
-    print("\n" + "═"*60)
-    print("TEST 1: RAG query")
-    print("═"*60)
-    r1 = run_agent("What is the SLA for high priority cases?", session_id=TEST_SESSION)
-    print(f"✅ {r1['output']}" if not r1["error"] else f"❌ {r1['error']}")
-
-    print("\n" + "═"*60)
-    print("TEST 2: Memory — should reference previous question")
-    print("═"*60)
-    r2 = run_agent("What was my previous question?", session_id=TEST_SESSION)
-    print(f"✅ {r2['output']}" if not r2["error"] else f"❌ {r2['error']}")
-
-    print("\n" + "═"*60)
-    print("TEST 3: Salesforce read")
-    print("═"*60)
-    r3 = run_agent("What is the account health for Acme Corp?", session_id=TEST_SESSION)
-    print(f"✅ {r3['output']}" if not r3["error"] else f"❌ {r3['error']}")
+    TEST_SESSION = "token-test-001"
+ 
+    tests = [
+        # Pure Salesforce read → should use TEMPLATE (⚡), no LLM call
+        ("Salesforce read — expect template", "What is the account health for Acme Corp?"),
+        # KB query → should use LLM (🧠), summarisation needed
+        ("KB query — expect LLM", "What is the SLA for high priority cases?"),
+        # Combined → should use LLM (🧠), synthesis needed
+        ("Combined — expect LLM", "What is the account health for Globex Inc and what does the escalation policy say I should do?"),
+    ]
+ 
+    for label, query in tests:
+        print(f"\n{'═'*60}")
+        print(f"TEST: {label}")
+        print(f"QUERY: {query}")
+        print('═'*60)
+        r = run_agent(query, session_id=TEST_SESSION)
+        if r["error"]:
+            print(f"❌ Error: {r['error']}")
+        else:
+            print(f"✅ Output:\n{r['output']}")
