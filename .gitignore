@@ -1,4 +1,4 @@
-# ── Credentials and secrets ───────────────────────────────────────────────────
+# ── Credentials and secrets ──────────────────────────────────────────────────
 .env
 .env.local
 .env.production
