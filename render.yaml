@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: nexus360
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: RAG_LITE
+        value: "true"     # free tier has 512MB RAM — BM25-only retrieval, no torch
+      - key: GROQ_API_KEY
+        sync: false       # prompted for in the Render dashboard, never committed

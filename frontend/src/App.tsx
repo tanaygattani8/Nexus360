@@ -49,7 +49,9 @@ function loadSessionId(): string {
 
 // Dev: Vite on :5173 talks to FastAPI on :8000.
 // Production: FastAPI serves the built UI itself, so same-origin ("").
-const BASE_URL = import.meta.env.DEV ? "http://localhost:8000" : "";
+// VITE_API_URL overrides both (for a statically hosted frontend).
+const BASE_URL: string =
+  import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://localhost:8000" : "");
 
 const SUGGESTIONS = [
   "What is the account health for Acme Corp?",

@@ -5,12 +5,17 @@ from dotenv import load_dotenv
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
-from sentence_transformers import SentenceTransformer, CrossEncoder
 from rank_bm25 import BM25Okapi
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
 
 load_dotenv()
+
+# RAG_LITE=true skips torch + the embedding/reranker models entirely and
+# retrieves with BM25 only — for hosts with <1GB RAM (e.g. Render free tier).
+# With 8 documents, BM25 + LLM query rewrite retrieves accurately; the full
+# hybrid pipeline (dense + RRF + rerank) runs wherever RAM allows.
+RAG_LITE = os.getenv("RAG_LITE", "").lower() == "true"
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 COLLECTION_NAME  = "nexus360_knowledge"
@@ -28,7 +33,12 @@ RERANK_THRESHOLD = 0.0 # can be negative
 # stored on disk, never expires). If your free cloud cluster gets suspended,
 # just remove QDRANT_URL from .env and everything keeps working.
 
-QDRANT_MODE = "cloud" if (os.getenv("QDRANT_URL") and os.getenv("QDRANT_API_KEY")) else "local"
+if RAG_LITE:
+    QDRANT_MODE = "bm25-lite"   # vectors unused; /health reports it honestly
+elif os.getenv("QDRANT_URL") and os.getenv("QDRANT_API_KEY"):
+    QDRANT_MODE = "cloud"
+else:
+    QDRANT_MODE = "local"
 _LOCAL_QDRANT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qdrant_local")
 
 _qdrant: QdrantClient | None = None  # created once, reused across calls
@@ -62,14 +72,22 @@ def _get_llm() -> ChatGroq:
         max_tokens=128,  #query rewriting needs very few tokens
     )
 
-# SentenceTransformer downloads the model on first run (~90MB, cached after)
-print("Loading embedding model...")
-embedder = SentenceTransformer(EMBEDDING_MODEL)
-print("✅ Embedding model loaded")
+if RAG_LITE:
+    print("[kb] RAG_LITE=true — BM25-only retrieval, skipping embedding/reranker models")
+    embedder = None
+    reranker = None
+else:
+    # Imported here so RAG_LITE hosts never need torch installed at all
+    from sentence_transformers import SentenceTransformer, CrossEncoder
 
-print("Loading reranker model...")
-reranker = CrossEncoder(RERANK_MODEL)
-print(" Rerank loaded")
+    # SentenceTransformer downloads the model on first run (~90MB, cached after)
+    print("Loading embedding model...")
+    embedder = SentenceTransformer(EMBEDDING_MODEL)
+    print("[kb] Embedding model loaded")
+
+    print("Loading reranker model...")
+    reranker = CrossEncoder(RERANK_MODEL)
+    print("[kb] Reranker loaded")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -452,6 +470,18 @@ def search_knowledge_base(query: str) -> str:
     try:
         # Step 1 — Rewrite the query for better retrieval
         search_query = rewrite_query(query)
+
+        if RAG_LITE:
+            # ponytail: 8 docs — BM25 alone retrieves fine; dense search +
+            # reranking come back on hosts with enough RAM for torch
+            results = _bm25_search(search_query, top_k=TOP_K_FINAL)
+            if not results:
+                return "No documents found in the knowledge base."
+            output = f"Knowledge base results for '{query}':\n\n"
+            for i, doc in enumerate(results, 1):
+                output += f"[{i}] {doc['title']} (relevance: {doc['score']:+.3f})\n"
+                output += f"{doc['content'].strip()}\n\n"
+            return output.strip()
  
         # Step 2 — Dense search (semantic)
         dense_results = _dense_search(search_query, top_k=TOP_K_RETRIEVAL)
@@ -485,8 +515,9 @@ def search_knowledge_base(query: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    setup_collection()
-    seed_documents()
+    if not RAG_LITE:
+        setup_collection()
+        seed_documents()
  
     tests = [
         "what is the escalation policy for high priority cases?",

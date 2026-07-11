@@ -1,13 +1,3 @@
----
-title: Nexus360
-emoji: 🛰️
-colorFrom: cyan
-colorTo: blue
-sdk: docker
-app_port: 7860
-pinned: false
----
-
 # Nexus360 — Salesforce AI Agent
 
 A production-grade AI agent that connects to a live Salesforce org, reasons over CRM data, searches an internal knowledge base via RAG, and requires human approval before any write operation.
@@ -246,29 +236,35 @@ Outputs:
 - LLM-as-judge answer quality score (1-5) per question
 - Weak spot detection — flags retrieval misses and low quality answers
 
-## Deploy — live demo on Hugging Face Spaces (free)
+## Deploy — live demo on Render (free)
 
 The whole app runs as **one Docker container**: FastAPI serves both the API and the
 built React UI (same origin, no CORS). Thanks to the service fallbacks below, the
 deployed demo needs exactly **one secret**: `GROQ_API_KEY`.
 
-1. Create a free account at [huggingface.co](https://huggingface.co), then **New Space** → SDK: **Docker** → Blank → CPU basic (free).
-2. In the Space **Settings → Variables and secrets**, add secret `GROQ_API_KEY`.
-   (Optional: add the Salesforce/Supabase/Qdrant secrets to run live instead of on fallbacks.)
-3. Push this repo to the Space:
-   ```bash
-   git remote add space https://huggingface.co/spaces/<your-username>/<space-name>
-   git push --force space main
-   ```
-   (Use a Hugging Face access token with *write* scope as the password.)
-4. Watch the build in the Space's logs (~5-10 min first time — it bakes the ML models
-   into the image so cold starts are fast). Your shareable URL:
-   `https://<your-username>-<space-name>.hf.space`
+Render's free tier has 512MB RAM — too small for the PyTorch embedding/reranker
+models — so the deploy sets `RAG_LITE=true`: retrieval falls back to BM25 + LLM
+query rewrite (accurate on this 8-document KB), and torch is never installed.
+The full hybrid pipeline (dense + RRF + cross-encoder rerank) still runs locally.
 
-Notes: the YAML block at the top of this README is the Space config. Free Spaces
-sleep after ~48h without visitors and wake automatically on the next visit.
-Storage is ephemeral — SQLite memory and the local Qdrant index reset on restart
-(both rebuild themselves; fine for a demo).
+1. Create a free account at [render.com](https://render.com) (no credit card needed).
+2. **New → Blueprint**, connect this GitHub repo — Render reads `render.yaml`
+   and prompts you for `GROQ_API_KEY`.
+   (Or: **New → Web Service** → Docker runtime → free plan → add env vars
+   `RAG_LITE=true` and `GROQ_API_KEY` yourself.)
+3. First build takes a few minutes; your shareable URL is
+   `https://<service-name>.onrender.com`
+
+Notes: free services sleep after ~15 min idle and wake on the next visit
+(~30-60s cold start — open the link once before sharing it). Storage is
+ephemeral — SQLite chat memory resets on restart (fine for a demo). To run
+against live Salesforce/Supabase instead of the fallbacks, add those env vars
+in the Render dashboard.
+
+A statically hosted frontend (e.g. Hugging Face Static Space serving
+`frontend/dist`) also works: build with `VITE_API_URL=<backend-url>` and set
+`ALLOWED_ORIGINS=<frontend-origin>` on the backend. The single-container
+deploy above is simpler — one URL, no CORS.
 
 ## Resilience — free tiers expire, the demo doesn't
 

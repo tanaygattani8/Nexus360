@@ -21,9 +21,13 @@ app = FastAPI(
 )
 
 # SECTION 2: CORS
+# Same-origin in the single-container deployment (no CORS needed there).
+# ALLOWED_ORIGINS="https://a,https://b" adds extra origins for a separately
+# hosted static frontend.
+_extra_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173"] + _extra_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
