@@ -28,7 +28,7 @@ interface HealthResponse {
   status:     string;
   salesforce: string;   // "live" | "mock"
   memory:     string;   // "supabase" | "sqlite"
-  qdrant:     string;   // "cloud" | "local"
+  qdrant:     string;   // "cloud" | "local" | "bm25-lite"
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -53,11 +53,21 @@ function loadSessionId(): string {
 const BASE_URL: string =
   import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://localhost:8000" : "");
 
-const SUGGESTIONS = [
-  "What is the account health for Acme Corp?",
-  "List open cases for Globex Inc",
-  "Update the Acme Corp - Enterprise License to Closed Won",
-  "Create a high priority case for Initech Ltd about API downtime",
+type ToolType = "READ" | "WRITE" | "RAG";
+
+const SUGGESTIONS: { tag: string; type: ToolType; text: string }[] = [
+  { tag: "ACCOUNT HEALTH", type: "READ",  text: "What is the account health for Acme Corp?" },
+  { tag: "KNOWLEDGE BASE", type: "RAG",   text: "What is the escalation policy for high priority cases?" },
+  { tag: "PIPELINE",       type: "WRITE", text: "Update the Acme Corp - Enterprise License to Closed Won" },
+  { tag: "SUPPORT",        type: "WRITE", text: "Create a high priority case for Initech Ltd about API downtime" },
+];
+
+const AGENT_TOOLS: { name: string; type: ToolType }[] = [
+  { name: "get_account_health",       type: "READ" },
+  { name: "list_open_cases",          type: "READ" },
+  { name: "search_knowledge_base",    type: "RAG" },
+  { name: "update_opportunity_stage", type: "WRITE" },
+  { name: "create_support_case",      type: "WRITE" },
 ];
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -88,7 +98,7 @@ export default function App() {
     }
   }, [input]);
 
-  // Poll backend health so the status dot is honest, not decorative
+  // Poll backend health so the status panel is honest, not decorative
   useEffect(() => {
     let alive = true;
     async function check() {
@@ -223,144 +233,204 @@ export default function App() {
   // ── Render ──────────────────────────────────────────────────────────────────
   const online = health !== null;
 
+  // Status row: green when the primary service is live, amber on a local
+  // fallback, red when the backend itself is unreachable.
+  function statusFor(value: string | undefined, primary: string): "ok" | "fallback" | "down" {
+    if (!online || !value) return "down";
+    return value === primary ? "ok" : "fallback";
+  }
+
+  const statusRows: { label: string; value: string; state: "ok" | "fallback" | "down" }[] = [
+    { label: "BACKEND",    value: online ? "LIVE" : "OFFLINE", state: online ? "ok" : "down" },
+    { label: "SALESFORCE", value: (health?.salesforce ?? "—").toUpperCase(), state: statusFor(health?.salesforce, "live") },
+    { label: "MEMORY",     value: (health?.memory ?? "—").toUpperCase(),     state: statusFor(health?.memory, "supabase") },
+    { label: "VECTOR DB",  value: (health?.qdrant ?? "—").toUpperCase(),     state: statusFor(health?.qdrant, "cloud") },
+  ];
+
   return (
     <div className="app">
 
-      {/* ── Header ── */}
-      <header className="header">
-        <div className="header-left">
+      {/* ── Sidebar (desktop) ── */}
+      <aside className="sidebar">
+        <div className="sidebar-brand">
           <span className="logo-dot" />
-          <span className="logo-text">NEXUS<span className="logo-accent">360</span></span>
-          <span className="logo-tag">Salesforce AI Agent</span>
-          {health?.salesforce === "mock" && (
-            <span className="logo-tag logo-mock" title="Salesforce unavailable — running on built-in mock data">
-              SF: MOCK
-            </span>
-          )}
+          <div>
+            <div className="logo-text">NEXUS<span className="logo-accent">360</span></div>
+            <div className="logo-sub">SALESFORCE AI AGENT</div>
+          </div>
         </div>
-        <div className="header-right">
-          <span className="session-label">
-            SESSION <span className="session-id">{sessionId.slice(0, 8)}...</span>
-          </span>
+
+        <div className="panel">
+          <div className="panel-title">SYSTEM STATUS</div>
+          {statusRows.map(row => (
+            <div key={row.label} className="status-row">
+              <span className="status-row-label">
+                <span className={`status-pip status-pip--${row.state}`} />
+                {row.label}
+              </span>
+              <span className={`status-row-value status-row-value--${row.state}`}>{row.value}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="panel">
+          <div className="panel-title">AGENT TOOLS</div>
+          {AGENT_TOOLS.map(tool => (
+            <div key={tool.name} className="tool-row">
+              <span className="tool-name">{tool.name}</span>
+              <span className={`tag tag--${tool.type.toLowerCase()}`}>{tool.type}</span>
+            </div>
+          ))}
+          <div className="panel-note">Writes pause for human approval before executing.</div>
+        </div>
+
+        <div className="sidebar-foot">
+          <div className="session-label">
+            SESSION <span className="session-id">{sessionId.slice(0, 8)}</span>
+          </div>
           <button className="new-session-btn" onClick={newConversation}>
             NEW SESSION
           </button>
-          <span
-            className={`status-dot ${online ? "" : "status-dot--off"}`}
-            title={online
-              ? `Salesforce: ${health.salesforce} · Memory: ${health.memory} · Qdrant: ${health.qdrant}`
-              : "Backend unreachable"}
-          />
-          <span className={`status-text ${online ? "" : "status-text--off"}`}>
-            {online ? "LIVE" : "OFFLINE"}
-          </span>
         </div>
-      </header>
+      </aside>
 
-      {/* ── Chat window ── */}
-      <main className="chat-window" aria-live="polite">
+      {/* ── Workspace ── */}
+      <div className="workspace">
 
-        {messages.length === 0 && !loading && (
-          <div className="empty-state">
-            <p className="empty-title">What do you need to know?</p>
-            <p className="empty-sub">Query Salesforce or search internal knowledge base.</p>
-            <div className="suggestions">
-              {SUGGESTIONS.map(s => (
-                <button key={s} className="suggestion-chip" onClick={() => sendMessage(s)}>
-                  {s}
-                </button>
-              ))}
-            </div>
+        {/* Compact topbar — replaces the sidebar on small screens */}
+        <header className="topbar">
+          <div className="sidebar-brand">
+            <span className="logo-dot" />
+            <span className="logo-text">NEXUS<span className="logo-accent">360</span></span>
           </div>
-        )}
+          <div className="topbar-right">
+            <span
+              className={`status-pip status-pip--${online ? "ok" : "down"}`}
+              title={online ? "Backend online" : "Backend unreachable"}
+            />
+            <span className={`status-row-value status-row-value--${online ? "ok" : "down"}`}>
+              {online ? "LIVE" : "OFFLINE"}
+            </span>
+            <button className="new-session-btn" onClick={newConversation}>NEW SESSION</button>
+          </div>
+        </header>
 
-        {messages.map(msg => {
+        {/* ── Chat window ── */}
+        <main className="chat-window" aria-live="polite">
 
-          if (msg.role === "approval") {
+          {messages.length === 0 && !loading && (
+            <div className="empty-state">
+              <p className="empty-eyebrow">AGENT CONSOLE</p>
+              <h1 className="empty-title">What do you need to know?</h1>
+              <p className="empty-sub">
+                Query live Salesforce data, search internal policies, or update the pipeline —
+                write operations always ask for your approval first.
+              </p>
+              <div className="suggestions">
+                {SUGGESTIONS.map(s => (
+                  <button key={s.text} className="suggestion-card" onClick={() => sendMessage(s.text)}>
+                    <span className="suggestion-tags">
+                      <span className="tag">{s.tag}</span>
+                      <span className={`tag tag--${s.type.toLowerCase()}`}>{s.type}</span>
+                    </span>
+                    <span className="suggestion-text">{s.text}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {messages.map(msg => {
+
+            if (msg.role === "approval") {
+              return (
+                <div key={msg.id} className="message message--approval">
+                  <div className="message-meta">
+                    <span className="message-role">APPROVAL REQUIRED</span>
+                    <span className="message-time">{msg.timestamp}</span>
+                  </div>
+                  <pre className="message-text">{msg.text}</pre>
+                  {msg.decision ? (
+                    <div className={`approval-stamp approval-stamp--${msg.decision}`}>
+                      {msg.decision === "approved" ? "✓ APPROVED" : "✕ REJECTED"}
+                    </div>
+                  ) : (
+                    <div className="approval-buttons">
+                      <button
+                        className="approval-btn approval-btn--approve"
+                        onClick={() => handleApprove(msg)}
+                        disabled={loading}
+                      >
+                        ✓ APPROVE
+                      </button>
+                      <button
+                        className="approval-btn approval-btn--reject"
+                        onClick={() => handleReject(msg)}
+                        disabled={loading}
+                      >
+                        ✕ REJECT
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
             return (
-              <div key={msg.id} className="message message--approval">
+              <div key={msg.id} className={`message message--${msg.role}`}>
                 <div className="message-meta">
-                  <span className="message-role">APPROVAL REQUIRED</span>
+                  <span className="message-role">
+                    {msg.role === "user"   ? "YOU"    :
+                     msg.role === "error"  ? "ERROR"  :
+                     msg.role === "system" ? "SYSTEM" : "NEXUS360"}
+                  </span>
                   <span className="message-time">{msg.timestamp}</span>
                 </div>
                 <pre className="message-text">{msg.text}</pre>
-                {msg.decision ? (
-                  <div className={`approval-stamp approval-stamp--${msg.decision}`}>
-                    {msg.decision === "approved" ? "✓ APPROVED" : "✕ REJECTED"}
-                  </div>
-                ) : (
-                  <div className="approval-buttons">
-                    <button
-                      className="approval-btn approval-btn--approve"
-                      onClick={() => handleApprove(msg)}
-                      disabled={loading}
-                    >
-                      ✓ APPROVE
-                    </button>
-                    <button
-                      className="approval-btn approval-btn--reject"
-                      onClick={() => handleReject(msg)}
-                      disabled={loading}
-                    >
-                      ✕ REJECT
-                    </button>
-                  </div>
-                )}
               </div>
             );
-          }
+          })}
 
-          return (
-            <div key={msg.id} className={`message message--${msg.role}`}>
+          {loading && (
+            <div className="message message--agent">
               <div className="message-meta">
-                <span className="message-role">
-                  {msg.role === "user"   ? "YOU"    :
-                   msg.role === "error"  ? "ERROR"  :
-                   msg.role === "system" ? "SYSTEM" : "NEXUS360"}
-                </span>
-                <span className="message-time">{msg.timestamp}</span>
+                <span className="message-role">NEXUS360</span>
               </div>
-              <pre className="message-text">{msg.text}</pre>
+              <div className="thinking">
+                <span /><span /><span />
+                <p>Thinking...</p>
+              </div>
             </div>
-          );
-        })}
+          )}
 
-        {loading && (
-          <div className="message message--agent">
-            <div className="message-meta">
-              <span className="message-role">NEXUS360</span>
-            </div>
-            <div className="thinking">
-              <span /><span /><span />
-              <p>Thinking...</p>
-            </div>
+          <div ref={bottomRef} />
+        </main>
+
+        {/* ── Input bar ── */}
+        <footer className="input-bar">
+          <div className="input-inner">
+            <span className="prompt-glyph" aria-hidden="true">❯</span>
+            <textarea
+              ref={inputRef}
+              className="input-field"
+              rows={1}
+              aria-label="Message input"
+              placeholder="Ask about accounts, cases, opportunities, or internal policies..."
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+            />
+            <button
+              className="send-btn"
+              onClick={() => sendMessage(input)}
+              disabled={loading || !input.trim()}
+            >
+              {loading ? "..." : "SEND"}
+            </button>
           </div>
-        )}
+        </footer>
 
-        <div ref={bottomRef} />
-      </main>
-
-      {/* ── Input bar ── */}
-      <footer className="input-bar">
-        <textarea
-          ref={inputRef}
-          className="input-field"
-          rows={1}
-          aria-label="Message input"
-          placeholder="Ask about accounts, cases, opportunities, or internal policies..."
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-        />
-        <button
-          className="send-btn"
-          onClick={() => sendMessage(input)}
-          disabled={loading || !input.trim()}
-        >
-          {loading ? "..." : "SEND"}
-        </button>
-      </footer>
-
+      </div>
     </div>
   );
 }
