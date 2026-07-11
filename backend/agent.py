@@ -17,6 +17,7 @@ from tools import (
     list_open_cases,
     update_opportunity_stage,
     create_support_case,
+    VALID_STAGES,
 )
 
 from memory import save_message, load_history
@@ -60,30 +61,31 @@ class State(TypedDict):
     tools_used:   list[str]
 
 
-# SECTION 3 - PROMPTS
+# SECTION 3 — PROMPTS
 
 BASE_PROMPT = """You are Nexus360, an AI assistant with live access to Salesforce CRM data
 and an internal knowledge base of company policies and playbooks.
- 
+
 Core rules:
 - Use Salesforce tools for live account, case, and opportunity data.
 - Use search_knowledge_base for policies, SLAs, playbooks, and internal processes.
 - Use both tools when a question requires live data AND policy guidance.
 - Always cite your source: (Source: Salesforce) or (Source: knowledge base, <doc title>).
-- Be concise. Lead with the answer, follow with supporting detail."""
+- Be concise. Lead with the answer, follow with supporting detail.
+- Write in plain text. Do not use markdown formatting like ** or ##."""
+
+_STAGES_LINE = ", ".join(VALID_STAGES)
 
 TOOL_CONTEXT = {
-    "get_account_health": """
+    "get_account_health": f"""
 SALESFORCE ACCOUNT CONTEXT:
 - AnnualRevenue is in USD.
 - Open Cases count includes all non-Closed cases (New, In Progress, Escalated).
-- Opportunity StageName values: Prospecting, Qualification, Needs Analysis,
-  Value Proposition, Id. Decision Makers, Perception Analysis,
-  Proposal/Price Quote, Negotiation/Review, Closed Won, Closed Lost.
+- Opportunity StageName values: {_STAGES_LINE}.
 - CloseDate is the expected contract close date, not a guarantee.
 - Interpret account health: 0 open High cases = healthy, 1-2 = at risk, 3+ = critical.
-- If AnnualRevenue is null, the account has not reported revenue.""",
- 
+- If AnnualRevenue is N/A, the account has not reported revenue.""",
+
     "list_open_cases": """
 SALESFORCE CASE CONTEXT:
 - Priority levels: High (production impact), Medium (workaround exists), Low (cosmetic/question).
@@ -91,7 +93,7 @@ SALESFORCE CASE CONTEXT:
 - High priority cases open >24h should be escalated per policy.
 - CreatedDate is in UTC. Convert to local time when communicating to users.
 - If no open cases found, the account is in good standing on support.""",
- 
+
     "search_knowledge_base": """
 KNOWLEDGE BASE CONTEXT:
 - Documents cover: escalation policy, SLA definitions, account health scoring,
@@ -100,16 +102,14 @@ KNOWLEDGE BASE CONTEXT:
 - Relevance scores: above +3 = high confidence, 0 to +3 = moderate, below 0 = weak match.
 - If the retrieved document has a weak relevance score, caveat your answer.
 - Always name the specific document you are drawing from.""",
- 
-    "update_opportunity_stage": """
+
+    "update_opportunity_stage": f"""
 SALESFORCE OPPORTUNITY STAGE CONTEXT:
-- Valid stage progression: Prospecting → Qualification → Needs Analysis →
-  Value Proposition → Id. Decision Makers → Perception Analysis →
-  Proposal/Price Quote → Negotiation/Review → Closed Won / Closed Lost.
+- Valid stage progression: {_STAGES_LINE.replace(', ', ' → ')}.
 - Skipping stages (e.g. Qualification → Closed Won) flags a data quality issue.
 - Closed Lost requires a Loss Reason to be filled in the record.
 - Stage changes are immediately visible in Salesforce pipeline reports.""",
- 
+
     "create_support_case": """
 SALESFORCE CASE CREATION CONTEXT:
 - Priority must match business impact: High = production down or data loss risk,
@@ -123,25 +123,25 @@ def build_system_prompt(tools_used: list[str]) -> str:
     """
     Build a dynamic system prompt by combining the base prompt with
     context blocks for each tool that was called this turn.
- 
+
     Args:
         tools_used: List of tool names called during this turn.
- 
+
     Returns:
         Complete system prompt string.
     """
     prompt = BASE_PROMPT
- 
+
     # Inject context for each tool that was used
-    for tool_name in set(tools_used):   
+    for tool_name in set(tools_used):
         if tool_name in TOOL_CONTEXT:
             prompt += f"\n{TOOL_CONTEXT[tool_name]}"
- 
+
     return prompt
 
 
 # SECTION 4 — TOKEN EFFICIENCY HELPERS
- 
+
 def _needs_llm_response(tools_used: list[str]) -> bool:
     """
     Returns True only when the LLM is genuinely needed to format the response.
@@ -155,33 +155,29 @@ def _needs_llm_response(tools_used: list[str]) -> bool:
         return True
     # Pure Salesforce reads and write confirmations → use template
     return False
- 
- 
+
+
 def _format_template_response(state: State) -> dict:
     """
     Format a response using a deterministic template when LLM is not needed.
-    Extracts the last ToolMessage content and returns it directly with a source tag.
+    Joins ALL tool results from this turn (the same tool may have run more
+    than once, e.g. account health for two accounts) and adds a source tag.
     """
-    # Find the last ToolMessage — that's the tool's raw output
     tool_messages = [m for m in state["messages"] if isinstance(m, ToolMessage)]
- 
+
     if not tool_messages:
         return {"final_output": "No tool result available."}
- 
-    tool_content = tool_messages[-1].content
-    tools_used   = state.get("tools_used", [])
- 
-    # Determine source label
-    write_tools = {"update_opportunity_stage", "create_support_case"}
-    if any(t in write_tools for t in tools_used):
+
+    body       = "\n\n".join(str(m.content).strip() for m in tool_messages)
+    tools_used = state.get("tools_used", [])
+
+    if any(t in WRITE_TOOL_NAMES for t in tools_used):
         source = "Salesforce (write confirmed)"
     else:
         source = "Salesforce"
- 
-    # Return the raw tool output with source tag appended
-    # The tool output is already well-formatted plain text
-    final = f"{tool_content.strip()}\n\n(Source: {source})"
- 
+
+    final = f"{body}\n\n(Source: {source})"
+
     print(f"⚡ Template response used — skipped LLM call")
     return {
         "final_output": final,
@@ -189,7 +185,7 @@ def _format_template_response(state: State) -> dict:
     }
 
 
-# SECTION 4 — LLM
+# SECTION 5 — LLM
 
 def _build_llm() -> ChatGroq:
     api_key = os.getenv("GROQ_API_KEY")
@@ -206,75 +202,64 @@ llm            = _build_llm()
 llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
 
-# SECTION 4 — NODES
+# SECTION 6 — NODES
+
 # Node 1: REASON
 def reason(state: State) -> dict:
     messages = [SystemMessage(content=BASE_PROMPT)] + state["messages"]
     response = llm_with_tools.invoke(messages)
-
-    pending = None
-    if response.tool_calls:
-        tc      = response.tool_calls[0]
-        pending = {"name": tc["name"], "args": tc["args"]}
-
-    return {
-        "messages":     [response],
-        "pending_tool": pending,
-    }
+    return {"messages": [response]}
 
 
 # Node 2: VALIDATE
 def validate(state: State) -> dict:
-    tool_call = state["pending_tool"]
+    """
+    Sanitize tool arguments and gate write operations.
+    Checks EVERY tool call in the turn — if any of them is a write,
+    the whole turn pauses for human approval. (Checking only the first
+    call would let a write sneak through alongside a read.)
+    """
+    last = state["messages"][-1]
+    tool_calls = getattr(last, "tool_calls", None) or []
 
-    if not tool_call:
-        return {"approved": True}
+    # Input sanitization — mutate the message's tool_calls in place,
+    # because ToolNode executes from the message itself.
+    for tc in tool_calls:
+        for key in ("account_name", "opportunity_name"):
+            value = tc["args"].get(key)
+            if isinstance(value, str):
+                tc["args"][key] = value.strip().rstrip(".,!?;:")
 
-    tool_name = tool_call["name"]
-    args      = tool_call["args"]
+    writes = [tc for tc in tool_calls if tc["name"] in WRITE_TOOL_NAMES]
 
-    # Input sanitization
-    for key in ("account_name", "opportunity_name"):
-        if key in args:
-            args[key] = args[key].strip().rstrip(".,!?;:")
-
-    # Already approved on re-run → respect it
-    if state["approved"] is True:
-        return {"approved": True, "pending_tool": {"name": tool_name, "args": args}}
-
-    if tool_name in WRITE_TOOL_NAMES:
-        print(f"\n⚠️  WRITE OPERATION DETECTED: {tool_name}")
-        print(f"   Args: {args}")
-        print(f"   → Routing to human approval\n")
+    if writes:
+        # ponytail: only the first write is surfaced for approval; the LLM
+        # emitting two writes in one turn is rare — split into per-write
+        # approval cards if it ever happens in practice.
+        tc = writes[0]
+        print(f"\n⚠️  WRITE OPERATION DETECTED: {tc['name']}")
+        print(f"   Args: {tc['args']}")
+        print(f"   → Pausing for human approval\n")
         return {
             "approved":     None,
-            "pending_tool": {"name": tool_name, "args": args},
+            "pending_tool": {"name": tc["name"], "args": tc["args"]},
         }
 
-    return {"approved": True, "pending_tool": {"name": tool_name, "args": args}}
+    return {"approved": True, "pending_tool": None}
 
 
-# Node 3: HUMAN APPROVAL
-def human_approval(state: State) -> dict:
-    tool_call = state["pending_tool"]
+# Node 3: APPROVAL PAUSE
+def approval_pause(state: State) -> dict:
+    """
+    A write needs approval. End this run and hand the pending tool back to
+    the API. /approve executes EXACTLY this tool with EXACTLY these args —
+    the agent is never re-run, so what the user approves is what executes.
+    """
+    tc = state["pending_tool"]
     print(f"\n🛑 HUMAN APPROVAL REQUIRED")
-    print(f"   Tool:      {tool_call['name']}")
-    print(f"   Arguments: {tool_call['args']}")
-    print(f"   Approved:  {state['approved']}")
-
-    if state["approved"] is None:
-        print("   ⏸️  Waiting for human decision\n")
-        return {"approved": None}
-
-    if state["approved"] is True:
-        print("   ✅ Approved — executing\n")
-        return {"approved": True}
-
-    print("   ❌ Rejected — action blocked\n")
-    return {
-        "approved":     False,
-        "final_output": f"Action blocked. '{tool_call['name']}' requires approval before it can run.",
-    }
+    print(f"   Tool:      {tc['name']}")
+    print(f"   Arguments: {tc['args']}\n")
+    return {"final_output": f"Approval required before running '{tc['name']}'."}
 
 
 # Node 4: EXECUTE
@@ -292,7 +277,7 @@ def track_tools(state: State) -> dict:
         if isinstance(msg, AIMessage) and msg.tool_calls:
             for tc in msg.tool_calls:
                 tools_used.append(tc["name"])
- 
+
     print(f"🔧 Tools used this turn: {tools_used}")
     return {"tools_used": tools_used}
 
@@ -300,12 +285,17 @@ def track_tools(state: State) -> dict:
 # Node 6: RESPOND
 def respond(state: State) -> dict:
     """
-    UPDATED — smart routing:
-    - If LLM is genuinely needed (KB search or multi-tool): make the LLM call
-    - Otherwise: use a deterministic template — saves 300-500 tokens per query
+    Smart routing:
+    - No tools ran → the reason node's reply IS the answer (e.g. greetings)
+    - KB search or multi-tool → LLM synthesis with dynamic prompt
+    - Pure Salesforce reads/writes → deterministic template, saves an LLM call
     """
     tools_used = state.get("tools_used", [])
- 
+
+    if not tools_used:
+        last_ai = next((m for m in reversed(state["messages"]) if isinstance(m, AIMessage)), None)
+        return {"final_output": last_ai.content if last_ai else ""}
+
     if _needs_llm_response(tools_used):
         print(f"🧠 LLM response — tools require synthesis: {tools_used}")
         system_prompt = build_system_prompt(tools_used)
@@ -319,7 +309,7 @@ def respond(state: State) -> dict:
         return _format_template_response(state)
 
 
-# Node 6: SAVE MEMORY 
+# Node 7: SAVE MEMORY
 def save_memory(state: State) -> dict:
     session_id = state.get("session_id", "default")
 
@@ -336,36 +326,31 @@ def save_memory(state: State) -> dict:
     return {}
 
 
-# SECTION 6 — ROUTING
+# SECTION 7 — ROUTING
 
 def after_reason(state: State) -> Literal["validate", "respond"]:
-    if state["pending_tool"]:
+    last = state["messages"][-1]
+    if getattr(last, "tool_calls", None):
         return "validate"
     return "respond"
 
 
-def after_validate(state: State) -> Literal["human_approval", "execute"]:
+def after_validate(state: State) -> Literal["approval_pause", "execute"]:
     if state["approved"] is None:
-        return "human_approval"
+        return "approval_pause"
     return "execute"
 
 
-def after_approval(state: State) -> Literal["execute", "__end__"]:
-    if state["approved"] is True:
-        return "execute"
-    return "__end__"
-
-
-# SECTION 7 — BUILD THE GRAPH
+# SECTION 8 — BUILD THE GRAPH
 
 def build_graph():
     graph = StateGraph(State)
 
     graph.add_node("reason",         reason)
     graph.add_node("validate",       validate)
-    graph.add_node("human_approval", human_approval)
+    graph.add_node("approval_pause", approval_pause)
     graph.add_node("execute",        tool_node)
-    graph.add_node("track_tools", track_tools)
+    graph.add_node("track_tools",    track_tools)
     graph.add_node("respond",        respond)
     graph.add_node("save_memory",    save_memory)
 
@@ -377,14 +362,12 @@ def build_graph():
     })
 
     graph.add_conditional_edges("validate", after_validate, {
-        "human_approval": "human_approval",
+        "approval_pause": "approval_pause",
         "execute":        "execute",
     })
 
-    graph.add_conditional_edges("human_approval", after_approval, {
-        "execute":  "execute",
-        "__end__":  END,
-    })
+    # Approval pause ends the run — /approve executes the tool directly.
+    graph.add_edge("approval_pause", END)
 
     graph.add_edge("execute",     "track_tools")
     graph.add_edge("track_tools", "respond")
@@ -394,17 +377,15 @@ def build_graph():
     return graph.compile()
 
 
-# SECTION 8 — PUBLIC INTERFACE
+# Compiled once at import — not per request.
+agent_graph = build_graph()
 
-def run_agent(
-    user_message: str,
-    session_id:   str       = "default",
-    approved:     bool | None = None,
-) -> dict:
-    graph = build_graph()
 
-    # Load conversation history from Supabase
-    history     = load_history(session_id, limit=10)
+# SECTION 9 — PUBLIC INTERFACE
+
+def run_agent(user_message: str, session_id: str = "default") -> dict:
+    # Load conversation history from memory
+    history      = load_history(session_id, limit=10)
     all_messages = []
 
     for msg in history:
@@ -419,29 +400,26 @@ def run_agent(
     if len(all_messages) > 1:
         print(f"📚 Loaded {len(all_messages) - 1} messages from memory for session '{session_id}'")
 
-    # Build initial state 
     initial_state: State = {
         "messages":     all_messages,
         "session_id":   session_id,
         "pending_tool": None,
-        "approved":     approved,
+        "approved":     None,
         "final_output": "",
         "tools_used":   [],
     }
 
     try:
-        result = graph.invoke(initial_state)
+        result = agent_graph.invoke(initial_state)
         return {
             "output":       result.get("final_output", ""),
             "pending_tool": result.get("pending_tool"),
-            "approved":     result.get("approved"),
             "error":        None,
         }
     except Exception as exc:
         return {
             "output":       "",
             "pending_tool": None,
-            "approved":     None,
             "error":        str(exc),
         }
 
@@ -450,16 +428,20 @@ def run_agent(
 
 if __name__ == "__main__":
     TEST_SESSION = "token-test-001"
- 
+
     tests = [
+        # No tool needed → reason node's reply is the answer
+        ("Chitchat — expect direct reply", "Hello! What can you do?"),
         # Pure Salesforce read → should use TEMPLATE (⚡), no LLM call
         ("Salesforce read — expect template", "What is the account health for Acme Corp?"),
         # KB query → should use LLM (🧠), summarisation needed
         ("KB query — expect LLM", "What is the SLA for high priority cases?"),
         # Combined → should use LLM (🧠), synthesis needed
         ("Combined — expect LLM", "What is the account health for Globex Inc and what does the escalation policy say I should do?"),
+        # Write → should pause with pending_tool, nothing executed
+        ("Write — expect approval pause", "Move the Acme Corp - Enterprise License deal to Closed Won"),
     ]
- 
+
     for label, query in tests:
         print(f"\n{'═'*60}")
         print(f"TEST: {label}")
@@ -468,5 +450,7 @@ if __name__ == "__main__":
         r = run_agent(query, session_id=TEST_SESSION)
         if r["error"]:
             print(f"❌ Error: {r['error']}")
+        elif r["pending_tool"]:
+            print(f"⏸ Approval required: {r['pending_tool']}")
         else:
             print(f"✅ Output:\n{r['output']}")

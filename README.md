@@ -1,3 +1,13 @@
+---
+title: Nexus360
+emoji: 🛰️
+colorFrom: cyan
+colorTo: blue
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Nexus360 — Salesforce AI Agent
 
 A production-grade AI agent that connects to a live Salesforce org, reasons over CRM data, searches an internal knowledge base via RAG, and requires human approval before any write operation.
@@ -10,10 +20,11 @@ Built as a demonstration of end-to-end agent architecture for the Salesforce Age
 
 - **Query live Salesforce data** in plain English — accounts, cases, opportunities
 - **Search internal knowledge base** — policies, SLAs, playbooks via RAG (Qdrant)
-- **Human-in-the-loop approval** — write operations pause and require confirmation before executing
+- **Human-in-the-loop approval** — write operations pause; approval executes exactly the tool call the user saw, never a re-run of the agent
 - **Persistent memory** — conversation history saved per session via Supabase
 - **Full observability** — every agent run traced in LangSmith
-- **React chat UI** — dark terminal aesthetic, approval cards, session management
+- **React chat UI** — dark terminal aesthetic, approval cards with audit trail, session management, live backend health indicator
+- **Expiry-proof fallbacks** — free-tier services die; the demo doesn't. No Supabase → local SQLite. No Qdrant Cloud → embedded local Qdrant. No Salesforce org → built-in mock data (`MOCK_SF=true` or automatic on connection failure). `/health` reports which mode each service is in.
 
 ---
 
@@ -159,13 +170,15 @@ run_agent()
   └── Append current message
      ↓
 LangGraph Graph
-  ├── reason        → LLM decides which tool to call
-  ├── validate      → sanitize inputs, classify READ vs WRITE
-  ├── human_approval→ WRITE ops pause here, wait for /approve or /reject
-  ├── execute       → ToolNode runs the Salesforce or RAG tool
-  ├── track_tools   → records which tools ran this turn
-  ├── respond       → LLM formats output (or deterministic template for Salesforce reads)
-  └── save_memory   → persist turn to Supabase
+  ├── reason         → LLM decides which tool(s) to call
+  ├── validate       → sanitize inputs, check EVERY tool call — any WRITE pauses the turn
+  ├── approval_pause → WRITE ops end the run here; /approve executes exactly the
+  │                    approved tool + args directly (the agent is never re-run)
+  ├── execute        → ToolNode runs the Salesforce or RAG tool(s)
+  ├── track_tools    → records which tools ran this turn
+  ├── respond        → LLM formats output (or deterministic template for Salesforce reads;
+  │                    or the reason node's reply directly when no tool was needed)
+  └── save_memory    → persist turn to Supabase (or local SQLite fallback)
      ↓
 FastAPI returns JSON { output, pending_tool, needs_approval, error }
      ↓
@@ -233,11 +246,50 @@ Outputs:
 - LLM-as-judge answer quality score (1-5) per question
 - Weak spot detection — flags retrieval misses and low quality answers
 
+## Deploy — live demo on Hugging Face Spaces (free)
+
+The whole app runs as **one Docker container**: FastAPI serves both the API and the
+built React UI (same origin, no CORS). Thanks to the service fallbacks below, the
+deployed demo needs exactly **one secret**: `GROQ_API_KEY`.
+
+1. Create a free account at [huggingface.co](https://huggingface.co), then **New Space** → SDK: **Docker** → Blank → CPU basic (free).
+2. In the Space **Settings → Variables and secrets**, add secret `GROQ_API_KEY`.
+   (Optional: add the Salesforce/Supabase/Qdrant secrets to run live instead of on fallbacks.)
+3. Push this repo to the Space:
+   ```bash
+   git remote add space https://huggingface.co/spaces/<your-username>/<space-name>
+   git push --force space main
+   ```
+   (Use a Hugging Face access token with *write* scope as the password.)
+4. Watch the build in the Space's logs (~5-10 min first time — it bakes the ML models
+   into the image so cold starts are fast). Your shareable URL:
+   `https://<your-username>-<space-name>.hf.space`
+
+Notes: the YAML block at the top of this README is the Space config. Free Spaces
+sleep after ~48h without visitors and wake automatically on the next visit.
+Storage is ephemeral — SQLite memory and the local Qdrant index reset on restart
+(both rebuild themselves; fine for a demo).
+
+## Resilience — free tiers expire, the demo doesn't
+
+Every external service has a local fallback, chosen automatically at startup:
+
+| Service | Primary | Fallback | Trigger |
+|---|---|---|---|
+| Salesforce | Live dev org | Built-in mock data (same seed accounts/cases/opps) | Connection fails, creds missing, or `MOCK_SF=true` |
+| Memory | Supabase | Local SQLite (`backend/memory.db`) | `SUPABASE_URL` not set |
+| Vector DB | Qdrant Cloud | Embedded local Qdrant (`backend/qdrant_local/`, auto-seeded) | `QDRANT_URL` not set |
+
+`GET /health` reports the active mode per service, and the UI header shows an
+honest LIVE/OFFLINE dot plus an `SF: MOCK` badge when Salesforce is mocked.
+Only `GROQ_API_KEY` is strictly required.
+
 ## Known Limitations
 
 - No authentication on API endpoints (intentional for local demo)
 - No streaming responses (FastAPI + LangGraph both support it — next upgrade)
-- Approval state held in React state (would use Supabase in production)
+- Single reasoning pass per turn — parallel tool calls work, but the agent doesn't loop back for sequential multi-step tool chains (a ReAct loop would trade away the template-response token savings)
+- If the LLM proposes two writes in one turn, only the first is surfaced for approval
 - No fuzzy account name matching (RAG semantic search is the right fix — scoped to Phase 3+)
 
 ---

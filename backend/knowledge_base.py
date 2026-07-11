@@ -24,13 +24,32 @@ RERANK_THRESHOLD = 0.0 # can be negative
 
 
 # ── Clients & Models───────────────────────────────────────────────────────────
+# Qdrant Cloud when configured, otherwise a local embedded Qdrant (same API,
+# stored on disk, never expires). If your free cloud cluster gets suspended,
+# just remove QDRANT_URL from .env and everything keeps working.
+
+QDRANT_MODE = "cloud" if (os.getenv("QDRANT_URL") and os.getenv("QDRANT_API_KEY")) else "local"
+_LOCAL_QDRANT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qdrant_local")
+
+_qdrant: QdrantClient | None = None  # created once, reused across calls
 
 def _get_qdrant() -> QdrantClient:
-    url     = os.getenv("QDRANT_URL")
-    api_key = os.getenv("QDRANT_API_KEY")
-    if not url or not api_key:
-        raise EnvironmentError("QDRANT_URL or QDRANT_API_KEY not set in .env")
-    return QdrantClient(url=url, api_key=api_key)
+    global _qdrant
+    if _qdrant is None:
+        if QDRANT_MODE == "cloud":
+            _qdrant = QdrantClient(
+                url=os.getenv("QDRANT_URL"),
+                api_key=os.getenv("QDRANT_API_KEY"),
+            )
+        else:
+            print(f"[qdrant] No cloud credentials — using local embedded Qdrant at {_LOCAL_QDRANT_PATH}")
+            _qdrant = QdrantClient(path=_LOCAL_QDRANT_PATH)
+            # Local mode is zero-setup: seed the collection on first use
+            existing = [c.name for c in _qdrant.get_collections().collections]
+            if COLLECTION_NAME not in existing:
+                setup_collection()
+                seed_documents()
+    return _qdrant
 
 def _get_llm() -> ChatGroq:
     api_key = os.getenv("GROQ_API_KEY")
@@ -191,15 +210,12 @@ DOCUMENTS = [
         "content":  """
         Opportunity Stage Definitions — Sales Team
         Prospecting: Initial contact made, need identified. Probability: 10%
-        Qualification: Budget, authority, need, and timeline confirmed (BANT). Probability: 20%
-        Needs Analysis: Deep discovery completed, pain points documented. Probability: 30%
-        Value Proposition: Custom demo or POC delivered. Probability: 40%
-        Id. Decision Makers: All stakeholders identified and engaged. Probability: 60%
-        Perception Analysis: Objections handled, competitive positioning done. Probability: 70%
-        Proposal/Price Quote: Formal proposal sent and reviewed. Probability: 75%
-        Negotiation/Review: Contract in legal review or active negotiation. Probability: 90%
+        Qualification: Budget, authority, need, and timeline confirmed (BANT). Probability: 25%
+        Proposal: Formal proposal sent and reviewed. Probability: 60%
+        Negotiation: Contract in legal review or active negotiation. Probability: 90%
         Closed Won: Contract signed. Probability: 100%
         Closed Lost: Deal lost. Always fill in the Loss Reason field.
+        These are the only valid stages in our Salesforce org.
         Do not skip stages — moving from Qualification directly to Closed Won flags a data quality issue.
         """
     },

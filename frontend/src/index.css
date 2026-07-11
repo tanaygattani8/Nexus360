@@ -2,7 +2,9 @@
 @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Syne:wght@400;600;800&display=swap');
 
 /* ── Design tokens ────────────────────────────────────────────────────────── */
+/* --text-dim and --text-muted lightened for WCAG AA contrast on --bg */
 :root {
+  color-scheme: dark;
   --bg:           #0a0c0f;
   --bg-surface:   #0f1318;
   --bg-elevated:  #151b22;
@@ -15,9 +17,12 @@
   --error-bg:     #1a0a0a;
   --error-border: #5c1a1a;
   --error-text:   #ff4d4d;
+  --success:      #10b981;
+  --danger:       #ef4444;
+  --warn:         #f59e0b;
   --text-primary: #e2eaf2;
-  --text-dim:     #4a6478;
-  --text-muted:   #2a3a48;
+  --text-dim:     #7d95a8;
+  --text-muted:   #66798d;
   --font-mono:    'Share Tech Mono', monospace;
   --font-ui:      'Syne', sans-serif;
 }
@@ -97,12 +102,18 @@ body {
 }
 
 .logo-tag {
-  font-size: 0.65rem;
+  font-size: 0.72rem;
   color: var(--text-dim);
   letter-spacing: 0.08em;
   border: 1px solid var(--border);
   padding: 2px 8px;
   border-radius: 2px;
+}
+
+/* Shown when Salesforce is unreachable and the backend fell back to mock data */
+.logo-mock {
+  border-color: var(--warn);
+  color: var(--warn);
 }
 
 .header-right {
@@ -119,10 +130,19 @@ body {
   box-shadow: 0 0 6px #00ff88;
 }
 
+.status-dot--off {
+  background: var(--danger);
+  box-shadow: 0 0 6px var(--danger);
+}
+
 .status-text {
-  font-size: 0.65rem;
+  font-size: 0.7rem;
   color: #00ff88;
   letter-spacing: 0.15em;
+}
+
+.status-text--off {
+  color: var(--danger);
 }
 
 /* ── Chat window ──────────────────────────────────────────────────────────── */
@@ -229,13 +249,13 @@ body {
 }
 
 .message-role {
-  font-size: 0.62rem;
+  font-size: 0.7rem;
   letter-spacing: 0.15em;
   font-weight: 600;
 }
 
 .message-time {
-  font-size: 0.6rem;
+  font-size: 0.7rem;
   color: var(--text-muted);
 }
 
@@ -307,36 +327,9 @@ body {
   letter-spacing: 0.08em;
 }
 
-/* ── Session label + new conversation button ──────────────────────────────── */
-.session-label {
-  font-size: 0.6rem;
-  color: var(--text-muted);
-  letter-spacing: 0.1em;
-  font-family: var(--font-mono);
-}
-
-.new-convo-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  font-family: var(--font-ui);
-  font-size: 0.62rem;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  padding: 4px 10px;
-  border-radius: 2px;
-  cursor: pointer;
-  transition: border-color 0.2s, color 0.2s;
-}
-
-.new-convo-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 /* ── Session label ────────────────────────────────────────────────────────── */
 .session-label {
-  font-size: 0.6rem;
+  font-size: 0.7rem;
   color: var(--text-muted);
   letter-spacing: 0.08em;
 }
@@ -352,7 +345,7 @@ body {
   color: var(--text-dim);
   font-family: var(--font-ui);
   font-weight: 600;
-  font-size: 0.6rem;
+  font-size: 0.68rem;
   letter-spacing: 0.12em;
   padding: 4px 10px;
   border-radius: 2px;
@@ -419,6 +412,30 @@ body {
 .approval-btn--reject:hover:not(:disabled) {
   background: #ef444422;
   box-shadow: 0 0 12px #ef444444;
+}
+
+/* Decision stamp — replaces the buttons after approve/reject so the card
+   stays in the transcript as an audit trail */
+.approval-stamp {
+  margin-top: 8px;
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 0.72rem;
+  letter-spacing: 0.15em;
+  padding: 6px 12px;
+  border-radius: 2px;
+  border: 1px dashed;
+  width: fit-content;
+}
+
+.approval-stamp--approved {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.approval-stamp--rejected {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 /* ── System message ───────────────────────────────────────────────────────── */

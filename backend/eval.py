@@ -1,5 +1,6 @@
 # Imports
 import os
+import re
 import time
 import json
 from dotenv import load_dotenv
@@ -124,7 +125,9 @@ Score this answer:""")
 
     try:
         response = llm.invoke(messages)
-        result   = json.loads(response.content.strip())
+        # Extract the JSON object even if the model wraps it in ```json fences
+        match  = re.search(r"\{.*\}", response.content, re.DOTALL)
+        result = json.loads(match.group() if match else response.content.strip())
         return {"score": int(result["score"]), "reason": result["reason"]}
     except Exception as e:
         return {"score": 0, "reason": f"Judge failed: {e}"}

@@ -1,0 +1,11 @@
+.git
+.claude
+**/node_modules
+**/venv
+**/__pycache__
+frontend/dist
+backend/memory.db
+backend/qdrant_local
+*.html
+*.txt
+!requirements.txt

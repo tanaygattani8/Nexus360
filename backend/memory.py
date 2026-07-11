@@ -1,18 +1,44 @@
 # ── Imports ───────────────────────────────────────────────────────────────────
 import os
+import sqlite3
 from dotenv import load_dotenv
-from supabase import create_client, Client
 
 load_dotenv()
 
-# ── Supabase client ───────────────────────────────────────────────────────────
-# Created once at module level — reused across all calls
-def _get_client() -> Client:
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_KEY")
-    if not url or not key:
-        raise EnvironmentError("SUPABASE_URL or SUPABASE_KEY not set in .env")
-    return create_client(url, key)
+# ── Storage backend ───────────────────────────────────────────────────────────
+# Supabase when configured, otherwise a local SQLite file with the same schema.
+# The SQLite fallback means the demo keeps working when the free Supabase
+# project pauses or expires — just remove SUPABASE_URL from .env.
+
+MEMORY_MODE = "supabase" if (os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_KEY")) else "sqlite"
+_SQLITE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory.db")
+
+_supabase = None  # created once, reused across calls
+
+if MEMORY_MODE == "sqlite":
+    print(f"[memory] No Supabase credentials — using local SQLite memory at {_SQLITE_PATH}")
+
+
+def _get_client():
+    global _supabase
+    if _supabase is None:
+        from supabase import create_client
+        _supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+    return _supabase
+
+
+def _sqlite() -> sqlite3.Connection:
+    conn = sqlite3.connect(_SQLITE_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    return conn
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -24,7 +50,7 @@ def _get_client() -> Client:
 
 def save_message(session_id: str, role: str, content: str) -> None:
     """
-    Save a single message to Supabase.
+    Save a single message.
 
     Args:
         session_id: Unique ID for this conversation (e.g. a UUID or timestamp).
@@ -32,12 +58,18 @@ def save_message(session_id: str, role: str, content: str) -> None:
         content:    The message text.
     """
     try:
-        client = _get_client()
-        client.table("conversations").insert({
-            "session_id": session_id,
-            "role":       role,
-            "content":    content,
-        }).execute()
+        if MEMORY_MODE == "supabase":
+            _get_client().table("conversations").insert({
+                "session_id": session_id,
+                "role":       role,
+                "content":    content,
+            }).execute()
+        else:
+            with _sqlite() as conn:
+                conn.execute(
+                    "INSERT INTO conversations (session_id, role, content) VALUES (?, ?, ?)",
+                    (session_id, role, content),
+                )
     except Exception as e:
         # Non-fatal — if memory save fails, the agent still works
         print(f"⚠️  Memory save failed: {e}")
@@ -52,7 +84,7 @@ def save_message(session_id: str, role: str, content: str) -> None:
 
 def load_history(session_id: str, limit: int = 10) -> list[dict]:
     """
-    Load the last N messages for a session from Supabase.
+    Load the last N messages for a session.
 
     Args:
         session_id: The session to load history for.
@@ -64,18 +96,24 @@ def load_history(session_id: str, limit: int = 10) -> list[dict]:
         Ordered oldest to newest.
     """
     try:
-        client = _get_client()
-        result = (
-            client.table("conversations")
-            .select("role, content, created_at")
-            .eq("session_id", session_id)
-            .order("created_at", desc=True)   # get latest first
-            .limit(limit)
-            .execute()
-        )
-        # Reverse so oldest message comes first (correct order for LLM)
-        messages = list(reversed(result.data))
-        return messages
+        if MEMORY_MODE == "supabase":
+            result = (
+                _get_client().table("conversations")
+                .select("role, content, created_at")
+                .eq("session_id", session_id)
+                .order("created_at", desc=True)   # get latest first
+                .limit(limit)
+                .execute()
+            )
+            # Reverse so oldest message comes first (correct order for LLM)
+            return list(reversed(result.data))
+        else:
+            with _sqlite() as conn:
+                rows = conn.execute(
+                    "SELECT role, content FROM conversations WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+                    (session_id, limit),
+                ).fetchall()
+            return [{"role": r, "content": c} for r, c in reversed(rows)]
     except Exception as e:
         print(f"⚠️  Memory load failed: {e}")
         return []
@@ -88,8 +126,11 @@ def load_history(session_id: str, limit: int = 10) -> list[dict]:
 def clear_history(session_id: str) -> None:
     """Delete all messages for a session. Useful for resetting during demos."""
     try:
-        client = _get_client()
-        client.table("conversations").delete().eq("session_id", session_id).execute()
+        if MEMORY_MODE == "supabase":
+            _get_client().table("conversations").delete().eq("session_id", session_id).execute()
+        else:
+            with _sqlite() as conn:
+                conn.execute("DELETE FROM conversations WHERE session_id = ?", (session_id,))
         print(f"🗑️  Cleared history for session: {session_id}")
     except Exception as e:
         print(f"⚠️  Memory clear failed: {e}")
@@ -101,6 +142,7 @@ def clear_history(session_id: str) -> None:
 
 if __name__ == "__main__":
     TEST_SESSION = "test-session-001"
+    print(f"Memory mode: {MEMORY_MODE}")
 
     print("── Saving messages ──────────────────────────────────")
     save_message(TEST_SESSION, "user",      "What is the health of Acme Corp?")
@@ -112,6 +154,8 @@ if __name__ == "__main__":
     history = load_history(TEST_SESSION)
     for msg in history:
         print(f"  [{msg['role']}] {msg['content']}")
+    assert len(history) == 3, f"expected 3 messages, got {len(history)}"
+    assert history[0]["role"] == "user" and history[-1]["role"] == "user"
 
     print("\n── Clearing history ─────────────────────────────────")
     clear_history(TEST_SESSION)
@@ -119,4 +163,5 @@ if __name__ == "__main__":
     print("\n── Confirming cleared ───────────────────────────────")
     history = load_history(TEST_SESSION)
     print(f"  Messages remaining: {len(history)}")
+    assert len(history) == 0
     print("✅ Done")

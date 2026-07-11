@@ -5,24 +5,31 @@ import "./index.css";
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type Role = "user" | "agent" | "error" | "approval" | "system";
+type Dict = Record<string, unknown>;
 
 interface Message {
   id:           number;
   role:         Role;
   text:         string;
   timestamp:    string;
-  pendingTool?: dict;
+  pendingTool?: Dict;
   originalMsg?: string;
+  decision?:    "approved" | "rejected";   // stamped on approval cards after a decision
 }
 
 interface ApiResponse {
   output:         string;
-  pending_tool:   dict | null;
+  pending_tool:   Dict | null;
   needs_approval: boolean;
   error:          string | null;
 }
 
-type dict = Record<string, unknown>;
+interface HealthResponse {
+  status:     string;
+  salesforce: string;   // "live" | "mock"
+  memory:     string;   // "supabase" | "sqlite"
+  qdrant:     string;   // "cloud" | "local"
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -30,15 +37,19 @@ function getTime(): string {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-// Generate a UUID for this browser session.
-// crypto.randomUUID() is built into all modern browsers — no library needed.
-// Called once when the app loads. Every message in this tab uses the same UUID.
-// New tab = new UUID = new conversation = fresh memory.
-function generateSessionId(): string {
-  return crypto.randomUUID();
+// Session ID persists in localStorage so a page refresh resumes the same
+// conversation (the backend remembers it). NEW SESSION mints a fresh one.
+function loadSessionId(): string {
+  const saved = localStorage.getItem("nexus360_session");
+  if (saved) return saved;
+  const id = crypto.randomUUID();
+  localStorage.setItem("nexus360_session", id);
+  return id;
 }
 
-const BASE_URL = "http://localhost:8000";
+// Dev: Vite on :5173 talks to FastAPI on :8000.
+// Production: FastAPI serves the built UI itself, so same-origin ("").
+const BASE_URL = import.meta.env.DEV ? "http://localhost:8000" : "";
 
 const SUGGESTIONS = [
   "What is the account health for Acme Corp?",
@@ -55,11 +66,9 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput]       = useState("");
   const [loading, setLoading]   = useState(false);
+  const [health, setHealth]     = useState<HealthResponse | null>(null);
 
-  // session_id is generated once when the component mounts.
-  // useRef keeps it stable across re-renders — useState would also work but
-  // useRef makes it clear this value never changes during the session.
-  const sessionId  = useRef<string>(generateSessionId());
+  const [sessionId, setSessionId] = useState<string>(loadSessionId);
   const bottomRef  = useRef<HTMLDivElement>(null);
   const inputRef   = useRef<HTMLTextAreaElement>(null);
   const idCounter  = useRef(0);
@@ -67,6 +76,31 @@ export default function App() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
+
+  // Autosize the input as the user types (up to the CSS max-height)
+  useEffect(() => {
+    const el = inputRef.current;
+    if (el) {
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    }
+  }, [input]);
+
+  // Poll backend health so the status dot is honest, not decorative
+  useEffect(() => {
+    let alive = true;
+    async function check() {
+      try {
+        const { data } = await axios.get<HealthResponse>(`${BASE_URL}/health`);
+        if (alive) setHealth(data);
+      } catch {
+        if (alive) setHealth(null);
+      }
+    }
+    check();
+    const timer = setInterval(check, 30_000);
+    return () => { alive = false; clearInterval(timer); };
+  }, []);
 
   // ── Add a message ───────────────────────────────────────────────────────────
   function addMessage(role: Role, text: string, extra?: Partial<Message>) {
@@ -87,7 +121,7 @@ export default function App() {
     }
 
     if (data.needs_approval && data.pending_tool) {
-      const tool = data.pending_tool as dict;
+      const tool = data.pending_tool;
       const args = tool.args as Record<string, string>;
       const summary = Object.entries(args)
         .map(([k, v]) => `${k}: ${v}`)
@@ -114,7 +148,7 @@ export default function App() {
     try {
       const { data } = await axios.post<ApiResponse>(`${BASE_URL}/chat`, {
         message:    trimmed,
-        session_id: sessionId.current,   // ← send session UUID with every message
+        session_id: sessionId,
       });
       handleApiResponse(data, trimmed);
     } catch (err: unknown) {
@@ -129,15 +163,16 @@ export default function App() {
   }
 
   // ── Approve ─────────────────────────────────────────────────────────────────
+  // Stamps the card and executes EXACTLY the pending tool via /approve —
+  // the card stays in the transcript as an audit trail.
   async function handleApprove(msg: Message) {
-    setMessages(prev => prev.filter(m => m.id !== msg.id));
-    addMessage("system", `✅ Approved — executing ${(msg.pendingTool as dict).name as string}...`);
+    setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, decision: "approved" } : m));
     setLoading(true);
 
     try {
       const { data } = await axios.post<ApiResponse>(`${BASE_URL}/approve`, {
         message:      msg.originalMsg,
-        session_id:   sessionId.current,   // ← same session UUID
+        session_id:   sessionId,
         pending_tool: msg.pendingTool,
       });
       handleApiResponse(data, msg.originalMsg ?? "");
@@ -150,8 +185,19 @@ export default function App() {
 
   // ── Reject ──────────────────────────────────────────────────────────────────
   async function handleReject(msg: Message) {
-    setMessages(prev => prev.filter(m => m.id !== msg.id));
-    addMessage("system", "❌ Rejected — action cancelled.");
+    setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, decision: "rejected" } : m));
+
+    try {
+      const { data } = await axios.post<ApiResponse>(`${BASE_URL}/reject`, {
+        message:      msg.originalMsg,
+        session_id:   sessionId,
+        pending_tool: msg.pendingTool,
+      });
+      addMessage("system", data.output);
+    } catch {
+      // Backend unreachable — the write was never executed either way
+      addMessage("system", "❌ Rejected — action cancelled.");
+    }
   }
 
   // ── Enter key ───────────────────────────────────────────────────────────────
@@ -163,15 +209,18 @@ export default function App() {
   }
 
   // ── New conversation ────────────────────────────────────────────────────────
-  // Generates a new UUID and clears the chat — starts a fresh memory session.
   function newConversation() {
-    sessionId.current = generateSessionId();
+    const id = crypto.randomUUID();
+    localStorage.setItem("nexus360_session", id);
+    setSessionId(id);
     setMessages([]);
     setInput("");
     inputRef.current?.focus();
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────
+  const online = health !== null;
+
   return (
     <div className="app">
 
@@ -181,23 +230,33 @@ export default function App() {
           <span className="logo-dot" />
           <span className="logo-text">NEXUS<span className="logo-accent">360</span></span>
           <span className="logo-tag">Salesforce AI Agent</span>
-          <span className="logo-tag logo-phase">PHASE 3</span>
+          {health?.salesforce === "mock" && (
+            <span className="logo-tag logo-mock" title="Salesforce unavailable — running on built-in mock data">
+              SF: MOCK
+            </span>
+          )}
         </div>
         <div className="header-right">
-          {/* Session ID shown in header — useful for demos to prove memory is per-session */}
           <span className="session-label">
-            SESSION <span className="session-id">{sessionId.current.slice(0, 8)}...</span>
+            SESSION <span className="session-id">{sessionId.slice(0, 8)}...</span>
           </span>
           <button className="new-session-btn" onClick={newConversation}>
             NEW SESSION
           </button>
-          <span className="status-dot" />
-          <span className="status-text">LIVE</span>
+          <span
+            className={`status-dot ${online ? "" : "status-dot--off"}`}
+            title={online
+              ? `Salesforce: ${health.salesforce} · Memory: ${health.memory} · Qdrant: ${health.qdrant}`
+              : "Backend unreachable"}
+          />
+          <span className={`status-text ${online ? "" : "status-text--off"}`}>
+            {online ? "LIVE" : "OFFLINE"}
+          </span>
         </div>
       </header>
 
       {/* ── Chat window ── */}
-      <main className="chat-window">
+      <main className="chat-window" aria-live="polite">
 
         {messages.length === 0 && !loading && (
           <div className="empty-state">
@@ -223,22 +282,28 @@ export default function App() {
                   <span className="message-time">{msg.timestamp}</span>
                 </div>
                 <pre className="message-text">{msg.text}</pre>
-                <div className="approval-buttons">
-                  <button
-                    className="approval-btn approval-btn--approve"
-                    onClick={() => handleApprove(msg)}
-                    disabled={loading}
-                  >
-                    ✓ APPROVE
-                  </button>
-                  <button
-                    className="approval-btn approval-btn--reject"
-                    onClick={() => handleReject(msg)}
-                    disabled={loading}
-                  >
-                    ✕ REJECT
-                  </button>
-                </div>
+                {msg.decision ? (
+                  <div className={`approval-stamp approval-stamp--${msg.decision}`}>
+                    {msg.decision === "approved" ? "✓ APPROVED" : "✕ REJECTED"}
+                  </div>
+                ) : (
+                  <div className="approval-buttons">
+                    <button
+                      className="approval-btn approval-btn--approve"
+                      onClick={() => handleApprove(msg)}
+                      disabled={loading}
+                    >
+                      ✓ APPROVE
+                    </button>
+                    <button
+                      className="approval-btn approval-btn--reject"
+                      onClick={() => handleReject(msg)}
+                      disabled={loading}
+                    >
+                      ✕ REJECT
+                    </button>
+                  </div>
+                )}
               </div>
             );
           }
@@ -265,7 +330,7 @@ export default function App() {
             </div>
             <div className="thinking">
               <span /><span /><span />
-              <p>Querying Salesforce...</p>
+              <p>Thinking...</p>
             </div>
           </div>
         )}
@@ -279,11 +344,11 @@ export default function App() {
           ref={inputRef}
           className="input-field"
           rows={1}
+          aria-label="Message input"
           placeholder="Ask about accounts, cases, opportunities, or internal policies..."
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          disabled={loading}
         />
         <button
           className="send-btn"

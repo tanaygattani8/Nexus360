@@ -4,6 +4,15 @@
 .env.production
 *.env
 
+# ── Local fallback storage (SQLite memory + embedded Qdrant) ─────────────────
+backend/memory.db
+backend/qdrant_local/
+
+# ── Local-only files (not for the public repo) ────────────────────────────────
+CLAUDE.md
+nexus360_interview_qa.txt
+nexus360_phase4_prep.html
+
 # ── Python ────────────────────────────────────────────────────────────────────
 venv/
 __pycache__/

@@ -10,7 +10,7 @@ sf = Salesforce(
     username=os.getenv("SALESFORCE_USERNAME"),
     password=os.getenv("SALESFORCE_PASSWORD"),
     security_token=os.getenv("SALESFORCE_SECURITY_TOKEN"),
-    domain='orgfarm-11296d48a9-dev-ed.develop.my'
+    domain=os.getenv("SALESFORCE_DOMAIN")
 )
 result = sf.query("SELECT Id, Name, Type FROM Account LIMIT 5")
 print(f"✓ Salesforce connected. Found {result['totalSize']} accounts.")
