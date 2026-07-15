@@ -1,5 +1,8 @@
 # Nexus360 — Salesforce AI Agent
 
+**🔗 Live demo: [nexus360-26bg.onrender.com](https://nexus360-26bg.onrender.com/)**
+_(free tier — first load may take ~30–60s to wake the server)_
+
 A production-grade AI agent that connects to a live Salesforce org, reasons over CRM data, searches an internal knowledge base via RAG, and requires human approval before any write operation.
 
 Built as a demonstration of end-to-end agent architecture for the Salesforce Agentforce Engineer role.
@@ -253,7 +256,8 @@ The full hybrid pipeline (dense + RRF + cross-encoder rerank) still runs locally
    (Or: **New → Web Service** → Docker runtime → free plan → add env vars
    `RAG_LITE=true` and `GROQ_API_KEY` yourself.)
 3. First build takes a few minutes; your shareable URL is
-   `https://<service-name>.onrender.com`
+   `https://<service-name>.onrender.com` (this repo's is live at
+   [nexus360-26bg.onrender.com](https://nexus360-26bg.onrender.com/)).
 
 Notes: free services sleep after ~15 min idle and wake on the next visit
 (~30-60s cold start — open the link once before sharing it). Storage is
