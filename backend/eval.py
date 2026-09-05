@@ -26,7 +26,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from knowledge_base import (
     rewrite_query, _bm25_search, _dense_search, _reciprocal_rank_fusion, _rerank,
-    RAG_LITE, QDRANT_MODE, TOP_K_FINAL, TOP_K_RETRIEVAL,
+    RAG_LITE, QDRANT_MODE, TOP_K_FINAL, TOP_K_RETRIEVAL, RERANK_CANDIDATES,
 )
 from agent import run_agent
 from memory import clear_history
@@ -114,7 +114,7 @@ def _retrieve_titles(query: str) -> list[str]:
     dense    = _dense_search(search_query, top_k=TOP_K_RETRIEVAL)
     bm25     = _bm25_search(search_query, top_k=TOP_K_RETRIEVAL)
     fused    = _reciprocal_rank_fusion(dense, bm25)
-    reranked = _rerank(query, fused)
+    reranked = _rerank(query, fused[:RERANK_CANDIDATES])
     return [d["title"] for d in reranked]
 
 

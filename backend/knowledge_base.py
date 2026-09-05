@@ -26,6 +26,12 @@ VECTOR_SIZE      = 384
 TOP_K_RETRIEVAL  = 6
 TOP_K_FINAL      = 3
 RERANK_THRESHOLD = 0.0 # can be negative
+# Cap on how many fused candidates reach the cross-encoder. Cross-encoders are
+# expensive (one model pass per candidate), so at scale you fuse wide then rerank
+# only the fused top-N — and RRF's ordering is what decides which candidates
+# survive that cut. A no-op at 8 docs (fused list is always smaller), but it
+# makes the retrieve → fuse → rerank pipeline correct as the corpus grows.
+RERANK_CANDIDATES = 25
 
 
 # ── Clients & Models───────────────────────────────────────────────────────────
@@ -495,8 +501,8 @@ def search_knowledge_base(query: str) -> str:
         if not fused:
             return "No documents found in the knowledge base."
  
-        # Step 5 — Cross-encoder rerank
-        reranked = _rerank(query, fused)  # use original query for reranking
+        # Step 5 — Cross-encoder rerank the fused top-N (see RERANK_CANDIDATES)
+        reranked = _rerank(query, fused[:RERANK_CANDIDATES])  # original query for reranking
  
         # Step 6 — Format output
         output = f"Knowledge base results for '{query}':\n\n"
