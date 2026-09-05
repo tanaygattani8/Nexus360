@@ -1,5 +1,6 @@
 # ── Imports ───────────────────────────────────────────────────────────────────
 import os
+import time
 from typing import Literal, Annotated
 from typing_extensions import TypedDict
 from dotenv import load_dotenv
@@ -22,6 +23,7 @@ from tools import (
 
 from memory import save_message, load_history
 from knowledge_base import search_knowledge_base as _search_kb
+from analytics import log_run
 
 load_dotenv()
 
@@ -410,10 +412,25 @@ def run_agent(user_message: str, session_id: str = "default") -> dict:
     }
 
     try:
-        result = agent_graph.invoke(initial_state)
+        started = time.perf_counter()
+        result  = agent_graph.invoke(initial_state)
+        latency_ms = (time.perf_counter() - started) * 1000
+
+        tools_used = result.get("tools_used", [])
+        pending    = result.get("pending_tool")
+        if pending:
+            path = "approval_pending"
+        elif not tools_used:
+            path = "direct"
+        elif _needs_llm_response(tools_used):
+            path = "llm"
+        else:
+            path = "template"
+        log_run(session_id, tools_used, path, latency_ms)
+
         return {
             "output":       result.get("final_output", ""),
-            "pending_tool": result.get("pending_tool"),
+            "pending_tool": pending,
             "error":        None,
         }
     except Exception as exc:

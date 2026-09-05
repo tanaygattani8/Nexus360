@@ -1,11 +1,11 @@
 # Nexus360 — Salesforce AI Agent
 
 **🔗 Live demo: [nexus360-26bg.onrender.com](https://nexus360-26bg.onrender.com/)**
-_(free tier — first load may take ~30–60s to wake the server)_
+_(free tier, first load may take 30 to 60s to wake the server)_
 
-A production-grade AI agent that connects to a live Salesforce org, reasons over CRM data, searches an internal knowledge base via RAG, and requires human approval before any write operation.
+A full-stack AI agent that reasons over CRM data, searches an internal knowledge base via RAG, and requires human approval before any write operation. It runs against a live Salesforce org or fully self-contained on local fallbacks.
 
-Built as a demonstration of end-to-end agent architecture for the Salesforce Agentforce Engineer role.
+Built to show the engineering behind production AI agents: safe tool use over real systems, retrieval quality you can measure, cost-aware model routing, and run analytics. That is the data-and-AI work of making agents grounded, measurable, and cheap to run. It also independently implements the primitives that platforms like Salesforce Agentforce and Data 360 productize (see [How this maps to Agentforce](#how-this-maps-to-agentforce-360)).
 
 ---
 
@@ -13,11 +13,33 @@ Built as a demonstration of end-to-end agent architecture for the Salesforce Age
 
 - **Query live Salesforce data** in plain English — accounts, cases, opportunities
 - **Search internal knowledge base** — policies, SLAs, playbooks via RAG (Qdrant)
-- **Human-in-the-loop approval** — write operations pause; approval executes exactly the tool call the user saw, never a re-run of the agent
+- **Human-in-the-loop approval** — write operations pause; the server executes exactly the tool call it stashed when the agent proposed it, never the args the client echoes back and never a re-run of the agent
+- **Run analytics** — a METRICS view (and `GET /analytics`) tracks tool mix, LLM calls skipped and cost avoided, human-approval rate, and p50/p95 latency: the core Agentforce Command Center signals, measured on your own runs
+- **Measured retrieval** — an eval suite scores the *deployed* retrieval path (Precision@1/@3, MRR), judges answer quality on the agent's real answer, and tests abstention on out-of-scope questions
 - **Persistent memory** — conversation history saved per session via Supabase
 - **Full observability** — every agent run traced in LangSmith
 - **React chat UI** — dark terminal aesthetic, approval cards with audit trail, session management, live backend health indicator
 - **Expiry-proof fallbacks** — free-tier services die; the demo doesn't. No Supabase → local SQLite. No Qdrant Cloud → embedded local Qdrant. No Salesforce org → built-in mock data (`MOCK_SF=true` or automatic on connection failure). `/health` reports which mode each service is in.
+
+---
+
+## How this maps to Agentforce 360
+
+This project was built from open-source primitives to understand, from the inside,
+what a modern agent platform actually has to do. Each piece here corresponds to
+something Salesforce ships as a product in Agentforce 360 / Data 360:
+
+| Built here | Productized by Salesforce as | The idea |
+|---|---|---|
+| Binding approval: the server executes only the write it stashed, never the client's args | Einstein Trust Layer + human-in-the-loop guardrails | A deterministic trust boundary around a probabilistic model |
+| Hybrid RAG + an eval suite (Precision@k, MRR, answer quality, abstention) | Data 360 retrievers + Agentforce Testing Center | Retrieval you measure, not retrieval you hope works |
+| Template-vs-LLM routing (skip the LLM on deterministic turns) | Consumption pricing (Flex Credits, ~$0.10/action) rewards fewer calls | Cost and latency discipline as an engineering concern |
+| Three-tier fallbacks + honest `/health` + `/analytics` | Command Center observability and reliability | Design for dependency failure; make system state visible |
+| `_soql_escape`, arg sanitization, valid-stage enums as one source of truth | Guardrails and injection-safe actions | Tool args are attacker-influenced input |
+
+The point is not that this replaces Agentforce. It is that building the primitives
+is how you learn where the hard problems in agent systems actually live: evaluation,
+grounding quality, cost, and observability.
 
 ---
 
@@ -26,7 +48,7 @@ Built as a demonstration of end-to-end agent architecture for the Salesforce Age
 | Layer | Technology |
 |---|---|
 | LLM | Groq (llama-3.3-70b-versatile) |
-| Agent framework | LangGraph 1.2 + LangChain 1.3 |
+| Agent framework | LangGraph + LangChain (langchain 1.3.1) |
 | CRM | Salesforce (simple-salesforce) |
 | Vector DB | Qdrant Cloud |
 | Embeddings | sentence-transformers (all-MiniLM-L6-v2) |
@@ -34,7 +56,7 @@ Built as a demonstration of end-to-end agent architecture for the Salesforce Age
 | Keyword search | rank-bm25 (BM25Okapi) |
 | Memory | Supabase (PostgreSQL) |
 | Backend | Python 3.12, FastAPI |
-| Frontend | React 18, TypeScript, Vite |
+| Frontend | React 19, TypeScript, Vite |
 | Observability | LangSmith |
 
 ---
@@ -50,8 +72,9 @@ nexus360/
 │   ├── agent.py                # LangGraph graph — 7 nodes, dynamic prompts, token efficiency
 │   ├── main.py                 # FastAPI — /chat /approve /reject /health
 │   ├── memory.py               # Supabase conversation memory
+│   ├── analytics.py            # run telemetry (tool mix, LLM-skip, approvals, latency) → /analytics
 │   ├── knowledge_base.py       # Qdrant RAG — hybrid search + reranking + query rewriting
-│   ├── eval.py                 # RAG eval suite — retrieval precision + answer quality
+│   ├── eval.py                 # RAG eval — deployed-path retrieval, agent-answer quality, abstention
 │   ├── seed_data.py            # Salesforce test data (8 accounts/opps/cases)
 │   ├── test_connections.py     # verify Salesforce + Groq connections
 │   ├── test_tools.py           # verify all 4 tools against live SF data
@@ -190,7 +213,11 @@ User query
   → Top 3 results injected into LLM context
 ```
 
-**Eval results:** Precision@1: 77.8% | Precision@3: 100% | Answer quality: 4.78/5
+**Eval:** `python eval.py` scores the pipeline you actually deploy (BM25-lite when
+`RAG_LITE=true`, full hybrid otherwise) rather than a pipeline that never runs in
+production. It reports retrieval Precision@1/@3 and MRR, answer quality judged on
+the agent's synthesized answer (not raw retrieved text), and an abstention rate on
+out-of-scope questions the KB cannot answer. Run it to get numbers for your config.
 
 ### Tools
 
@@ -208,8 +235,10 @@ User query
 |---|---|---|
 | `/` | GET | Health check |
 | `/chat` | POST | Send a message, get a response or approval request |
-| `/approve` | POST | Approve a pending write operation |
+| `/approve` | POST | Approve the pending write (executes the server-stashed call) |
 | `/reject` | POST | Reject a pending write operation |
+| `/health` | GET | Active mode per service (salesforce/memory/qdrant) |
+| `/analytics` | GET | Aggregated run metrics for the METRICS dashboard |
 
 ---
 
@@ -235,9 +264,10 @@ python eval.py
 ```
 
 Outputs:
-- Precision@1 and Precision@3 for retrieval
-- LLM-as-judge answer quality score (1-5) per question
-- Weak spot detection — flags retrieval misses and low quality answers
+- Retrieval Precision@1, Precision@3, and MRR on the deployed retrieval path
+- Answer quality (LLM-as-judge, 1-5) scored on the agent's real answer, over multiple runs so variance shows
+- Abstention rate on out-of-scope questions the KB can't answer (safety signal)
+- Weak spot detection — retrieval misses, low quality answers, and hallucinations on unknown questions
 
 ## Deploy — live demo on Render (free)
 

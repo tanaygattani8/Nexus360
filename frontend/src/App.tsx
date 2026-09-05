@@ -31,6 +31,30 @@ interface HealthResponse {
   qdrant:     string;   // "cloud" | "local" | "bm25-lite"
 }
 
+interface StatsResponse {
+  total_runs:         number;
+  by_path:            Record<string, number>;
+  tool_counts:        Record<string, number>;
+  llm_calls_skipped:  number;
+  skip_rate:          number;
+  est_cost_saved:     number;
+  approval_rate:      number;
+  writes_approved:    number;
+  writes_rejected:    number;
+  latency_p50_ms:     number;
+  latency_p95_ms:     number;
+}
+
+// Friendly labels for the response-path metric.
+const PATH_LABELS: Record<string, string> = {
+  direct:           "Direct reply (no tool)",
+  template:         "Template (LLM skipped)",
+  llm:              "LLM synthesis",
+  approval_pending: "Write - awaiting approval",
+  write_approved:   "Write - approved",
+  write_rejected:   "Write - rejected",
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function getTime(): string {
@@ -70,6 +94,97 @@ const AGENT_TOOLS: { name: string; type: ToolType }[] = [
   { name: "create_support_case",      type: "WRITE" },
 ];
 
+// ── Metrics view ──────────────────────────────────────────────────────────────
+
+function Stat({ label, value, sub, tone }: {
+  label: string; value: string | number; sub?: string; tone?: "ok" | "warn";
+}) {
+  return (
+    <div className="stat-card">
+      <div className="stat-label">{label}</div>
+      <div className={`stat-value${tone ? ` stat-value--${tone}` : ""}`}>{value}</div>
+      {sub && <div className="stat-sub">{sub}</div>}
+    </div>
+  );
+}
+
+function Bar({ label, value, max, tone }: {
+  label: string; value: number; max: number; tone?: "ok" | "warn";
+}) {
+  const pct = max > 0 ? Math.round((value / max) * 100) : 0;
+  return (
+    <div className="bar-row">
+      <span className="bar-label">{label}</span>
+      <span className="bar-track">
+        <span className={`bar-fill${tone ? ` bar-fill--${tone}` : ""}`} style={{ width: `${pct}%` }} />
+      </span>
+      <span className="bar-value">{value}</span>
+    </div>
+  );
+}
+
+function MetricsView({ stats, error, onRefresh }: {
+  stats: StatsResponse | null; error: boolean; onRefresh: () => void;
+}) {
+  let body;
+  if (error) {
+    body = <p className="metrics-empty">Cannot reach the backend for analytics.</p>;
+  } else if (!stats) {
+    body = <p className="metrics-empty">Loading metrics...</p>;
+  } else if (stats.total_runs === 0) {
+    body = <p className="metrics-empty">No agent runs recorded yet. Ask the agent something, then come back.</p>;
+  } else {
+    const pathMax = Math.max(...Object.values(stats.by_path), 1);
+    const toolMax = Math.max(...Object.values(stats.tool_counts), 1);
+    const pathEntries = Object.entries(stats.by_path).filter(([, v]) => v > 0);
+    const toolEntries = Object.entries(stats.tool_counts).sort((a, b) => b[1] - a[1]);
+
+    body = (
+      <>
+        <div className="stat-grid">
+          <Stat label="TOTAL RUNS" value={stats.total_runs} />
+          <Stat label="LLM CALLS SKIPPED" value={stats.llm_calls_skipped} sub={`${stats.skip_rate}% of tool turns`} tone="ok" />
+          <Stat label="EST. COST SAVED" value={`$${stats.est_cost_saved.toFixed(2)}`} sub="vs calling the LLM every turn" tone="ok" />
+          <Stat label="APPROVAL RATE" value={`${stats.approval_rate}%`} sub={`${stats.writes_approved} approved / ${stats.writes_rejected} rejected`} />
+          <Stat label="LATENCY P50" value={`${stats.latency_p50_ms} ms`} />
+          <Stat label="LATENCY P95" value={`${stats.latency_p95_ms} ms`} />
+        </div>
+
+        <div className="metrics-panels">
+          <div className="metrics-block">
+            <div className="panel-title">RESPONSE PATH</div>
+            {pathEntries.map(([k, v]) => (
+              <Bar key={k} label={PATH_LABELS[k] ?? k} value={v} max={pathMax}
+                tone={k === "template" || k === "direct" ? "ok" : k === "llm" ? "warn" : undefined} />
+            ))}
+          </div>
+          <div className="metrics-block">
+            <div className="panel-title">TOOL USAGE</div>
+            {toolEntries.length
+              ? toolEntries.map(([k, v]) => <Bar key={k} label={k} value={v} max={toolMax} />)
+              : <p className="metrics-empty">No tools called yet.</p>}
+          </div>
+        </div>
+
+        <p className="metrics-note">
+          Live telemetry from this deployment's agent runs. Recreates the core Agentforce
+          Command Center signals: tool mix, LLM cost avoided, latency, and human-approval rate.
+        </p>
+      </>
+    );
+  }
+
+  return (
+    <main className="metrics" aria-live="polite">
+      <div className="metrics-head">
+        <h2 className="metrics-title">AGENT ANALYTICS</h2>
+        <button className="new-session-btn" onClick={onRefresh}>REFRESH</button>
+      </div>
+      {body}
+    </main>
+  );
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // MAIN COMPONENT
 // ══════════════════════════════════════════════════════════════════════════════
@@ -79,6 +194,10 @@ export default function App() {
   const [input, setInput]       = useState("");
   const [loading, setLoading]   = useState(false);
   const [health, setHealth]     = useState<HealthResponse | null>(null);
+
+  const [view, setView]   = useState<"chat" | "metrics">("chat");
+  const [stats, setStats] = useState<StatsResponse | null>(null);
+  const [statsErr, setStatsErr] = useState(false);
 
   const [sessionId, setSessionId] = useState<string>(loadSessionId);
   const bottomRef  = useRef<HTMLDivElement>(null);
@@ -220,6 +339,18 @@ export default function App() {
     }
   }
 
+  // ── Metrics ─────────────────────────────────────────────────────────────────
+  async function openMetrics() {
+    setView("metrics");
+    try {
+      const { data } = await axios.get<StatsResponse>(`${BASE_URL}/analytics`);
+      setStats(data);
+      setStatsErr(false);
+    } catch {
+      setStatsErr(true);
+    }
+  }
+
   // ── New conversation ────────────────────────────────────────────────────────
   function newConversation() {
     const id = crypto.randomUUID();
@@ -315,6 +446,22 @@ export default function App() {
           </div>
         </header>
 
+        {/* View switch: live console vs run analytics */}
+        <nav className="view-tabs">
+          <button
+            className={`view-tab${view === "chat" ? " view-tab--active" : ""}`}
+            onClick={() => setView("chat")}
+          >CONSOLE</button>
+          <button
+            className={`view-tab${view === "metrics" ? " view-tab--active" : ""}`}
+            onClick={openMetrics}
+          >METRICS</button>
+        </nav>
+
+        {view === "metrics" ? (
+          <MetricsView stats={stats} error={statsErr} onRefresh={openMetrics} />
+        ) : (
+        <>
         {/* ── Chat window ── */}
         <main className="chat-window" aria-live="polite">
 
@@ -429,6 +576,8 @@ export default function App() {
             </button>
           </div>
         </footer>
+        </>
+        )}
 
       </div>
     </div>

@@ -6,6 +6,7 @@
 
 # ── Local fallback storage (SQLite memory + embedded Qdrant) ─────────────────
 backend/memory.db
+backend/analytics.db
 backend/qdrant_local/
 
 # ── Local-only files (not for the public repo) ────────────────────────────────

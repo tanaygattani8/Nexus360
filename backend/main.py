@@ -1,4 +1,5 @@
 import os
+import time
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -8,11 +9,20 @@ from agent import run_agent, WRITE_TOOLS
 from memory import save_message, MEMORY_MODE
 from tools import SF_MODE
 from knowledge_base import QDRANT_MODE
+from analytics import log_run, get_stats
 
 # Registry of tools that /approve is allowed to execute.
 # Approval is binding: we run EXACTLY the tool + args the user saw on the
 # approval card — the agent is never re-run, so it can't change its mind.
 WRITE_TOOL_REGISTRY = {t.name: t for t in WRITE_TOOLS}
+
+# Server-side stash of the pending write per session. /chat records the exact
+# tool + args the agent proposed; /approve executes THIS copy and ignores the
+# args echoed by the client, so a tampered /approve body cannot change what
+# runs. (Client-trusted args were the hole.)
+# ponytail: in-memory dict, single pending write per session — fine for the
+# single-worker free-tier deploy; move to the memory table if you scale out.
+_PENDING: dict[str, dict] = {}
 
 # SECTION 1: APP INSTANCE
 app = FastAPI(
@@ -62,6 +72,11 @@ def health():
         "qdrant":     QDRANT_MODE,  # "cloud" or "local"
     }
 
+# Agent run analytics — tool mix, LLM-skip savings, approval rate, latency.
+@app.get("/analytics")
+def analytics():
+    return get_stats()
+
 # SECTION 5: CHAT ENDPOINT
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
@@ -71,6 +86,14 @@ def chat(request: ChatRequest):
     )
 
     needs_approval = result["pending_tool"] is not None
+
+    # Stash the proposed write server-side so /approve runs exactly this,
+    # not whatever the client posts back.
+    if needs_approval:
+        _PENDING[request.session_id] = {
+            "tool":    result["pending_tool"],
+            "message": request.message,
+        }
 
     return ChatResponse(
         output = result["output"],
@@ -82,8 +105,17 @@ def chat(request: ChatRequest):
 # SECTION 6: APPROVE ENDPOINT
 @app.post("/approve", response_model=ChatResponse)
 def approve(request: ApprovalRequest):
-    name = request.pending_tool.get("name")
-    args = request.pending_tool.get("args") or {}
+    # Execute the write the SERVER stashed in /chat, never the client's args.
+    pending = _PENDING.get(request.session_id)
+    if pending is None:
+        return ChatResponse(
+            output="", pending_tool=None, needs_approval=False,
+            error="No pending write for this session — nothing to approve.",
+        )
+
+    name    = pending["tool"]["name"]
+    args    = pending["tool"].get("args") or {}
+    message = pending["message"]
 
     tool = WRITE_TOOL_REGISTRY.get(name)
     if tool is None:
@@ -93,14 +125,18 @@ def approve(request: ApprovalRequest):
         )
 
     try:
-        result = tool.invoke(args)
+        started = time.perf_counter()
+        result  = tool.invoke(args)
+        latency_ms = (time.perf_counter() - started) * 1000
     except Exception as exc:
         return ChatResponse(
             output="", pending_tool=None, needs_approval=False, error=str(exc),
         )
 
+    _PENDING.pop(request.session_id, None)
+    log_run(request.session_id, [name], "write_approved", latency_ms)
     output = f"{str(result).strip()}\n\n(Source: Salesforce (write confirmed))"
-    save_message(request.session_id, "user", request.message)
+    save_message(request.session_id, "user", message)
     save_message(request.session_id, "assistant", output)
 
     return ChatResponse(
@@ -111,11 +147,14 @@ def approve(request: ApprovalRequest):
 # SECTION 7: REJECT ENDPOINT
 @app.post("/reject", response_model=ChatResponse)
 def reject(request: ApprovalRequest):
-    name = request.pending_tool.get("name", "the operation")
-    output = f"Rejected — '{name}' was not executed. No changes were made."
+    pending = _PENDING.pop(request.session_id, None)
+    name    = pending["tool"]["name"] if pending else request.pending_tool.get("name", "the operation")
+    message = pending["message"] if pending else request.message
+    output  = f"Rejected — '{name}' was not executed. No changes were made."
 
+    log_run(request.session_id, [name], "write_rejected", 0)
     # Save the turn so session memory matches what the user saw
-    save_message(request.session_id, "user", request.message)
+    save_message(request.session_id, "user", message)
     save_message(request.session_id, "assistant", output)
 
     return ChatResponse(
