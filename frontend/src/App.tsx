@@ -297,7 +297,6 @@ export default function App() {
   // Stamps the card and executes EXACTLY the pending tool via /approve —
   // the card stays in the transcript as an audit trail.
   async function handleApprove(msg: Message) {
-    setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, decision: "approved" } : m));
     setLoading(true);
 
     try {
@@ -306,6 +305,11 @@ export default function App() {
         session_id:   sessionId,
         pending_tool: msg.pendingTool,
       });
+      // Stamp APPROVED only if the write actually ran. A stale card (superseded
+      // by a newer request) comes back with an error and stays actionable.
+      if (!data.error) {
+        setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, decision: "approved" } : m));
+      }
       handleApiResponse(data, msg.originalMsg ?? "");
     } catch (err: unknown) {
       addMessage("error", (err as Error).message);

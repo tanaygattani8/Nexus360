@@ -52,6 +52,16 @@ def log_run(session_id: str, tools: list[str], path: str, latency_ms: int) -> No
         print(f"[analytics] log failed: {e}")
 
 
+def clear_runs(session_id: str) -> None:
+    """Delete a session's telemetry. Used by the eval suite so evaluation
+    traffic doesn't inflate the dashboard's real numbers."""
+    try:
+        with _conn() as conn:
+            conn.execute("DELETE FROM runs WHERE session_id = ?", (session_id,))
+    except Exception as e:
+        print(f"[analytics] clear failed: {e}")
+
+
 def _percentile(values: list[int], pct: float) -> int:
     """Nearest-rank percentile. Empty → 0."""
     if not values:
@@ -81,8 +91,10 @@ def get_stats() -> dict:
         for t in (tools.split(",") if tools else []):
             tool_counts[t] = tool_counts.get(t, 0) + 1
 
-    # LLM-skip savings: template + direct turns avoided a synthesis call vs llm.
-    skipped = by_path.get("template", 0) + by_path.get("direct", 0)
+    # LLM-skip savings: only "template" turns skipped a synthesis call they
+    # otherwise would have made. "direct" (no-tool) turns never had a tool
+    # result to synthesize, so they don't count as an avoided call.
+    skipped = by_path.get("template", 0)
     llm_calls = by_path.get("llm", 0)
     tool_turns = skipped + llm_calls
     skip_rate = round(skipped / tool_turns * 100) if tool_turns else 0
@@ -127,10 +139,10 @@ if __name__ == "__main__":
     print(s)
     assert s["total_runs"] == 6
     assert s["by_path"]["template"] == 1 and s["by_path"]["llm"] == 1
-    # skipped = template(1) + direct(1) = 2; tool_turns = 2 + llm(1) = 3 → 67%
-    assert s["llm_calls_skipped"] == 2
-    assert s["skip_rate"] == round(2 / 3 * 100)
-    assert s["est_cost_saved"] == 0.20
+    # skipped = template(1) only; tool_turns = template(1) + llm(1) = 2 → 50%
+    assert s["llm_calls_skipped"] == 1
+    assert s["skip_rate"] == 50
+    assert s["est_cost_saved"] == 0.10
     # 1 approved of 2 resolved → 50%
     assert s["approval_rate"] == 50
     assert s["tool_counts"]["update_opportunity_stage"] == 2

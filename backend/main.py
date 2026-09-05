@@ -88,12 +88,15 @@ def chat(request: ChatRequest):
     needs_approval = result["pending_tool"] is not None
 
     # Stash the proposed write server-side so /approve runs exactly this,
-    # not whatever the client posts back.
+    # not whatever the client posts back. A non-write turn supersedes and
+    # clears any earlier pending write, so a stale card can't be approved.
     if needs_approval:
         _PENDING[request.session_id] = {
             "tool":    result["pending_tool"],
             "message": request.message,
         }
+    else:
+        _PENDING.pop(request.session_id, None)
 
     return ChatResponse(
         output = result["output"],
@@ -111,6 +114,18 @@ def approve(request: ApprovalRequest):
         return ChatResponse(
             output="", pending_tool=None, needs_approval=False,
             error="No pending write for this session — nothing to approve.",
+        )
+
+    # Staleness gate: the card the user clicked must match the current pending
+    # write. Multiple approval cards can sit in the transcript; approving an old
+    # one must not run the newer stashed write. We still execute the SERVER copy
+    # (never client args) — the echo is used only to detect a mismatch.
+    echoed = request.pending_tool or {}
+    if (echoed.get("name") != pending["tool"]["name"]
+            or (echoed.get("args") or {}) != (pending["tool"].get("args") or {})):
+        return ChatResponse(
+            output="", pending_tool=None, needs_approval=False,
+            error="This approval is stale — a newer request replaced it. Resend the request.",
         )
 
     name    = pending["tool"]["name"]

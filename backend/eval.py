@@ -30,6 +30,7 @@ from knowledge_base import (
 )
 from agent import run_agent
 from memory import clear_history
+from analytics import clear_runs
 
 load_dotenv()
 
@@ -268,6 +269,7 @@ def run_full_eval(quality_runs: int = 2) -> dict:
     quality    = eval_answer_quality(runs=quality_runs)
     abstention = eval_abstention()
     clear_history(_EVAL_SESSION)   # don't leave eval turns in memory
+    clear_runs(_EVAL_SESSION)      # or eval traffic in the analytics dashboard
     elapsed = time.time() - start
 
     print("\n" + "#" * 60)
