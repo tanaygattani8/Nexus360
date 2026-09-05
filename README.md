@@ -47,7 +47,7 @@ grounding quality, cost, and observability.
 
 | Layer | Technology |
 |---|---|
-| LLM | Groq (llama-3.3-70b-versatile) |
+| LLM | Groq (`openai/gpt-oss-120b`, override with `GROQ_MODEL`) |
 | Agent framework | LangGraph + LangChain (langchain 1.3.1) |
 | CRM | Salesforce (simple-salesforce) |
 | Vector DB | Qdrant Cloud |

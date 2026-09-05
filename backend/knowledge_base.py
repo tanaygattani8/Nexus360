@@ -9,6 +9,8 @@ from rank_bm25 import BM25Okapi
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from config import GROQ_MODEL
+
 load_dotenv()
 
 # RAG_LITE=true skips torch + the embedding/reranker models entirely and
@@ -73,7 +75,7 @@ def _get_llm() -> ChatGroq:
         raise EnvironmentError("GROQ_API_KEY not set in .env")
     return ChatGroq(
         api_key=api_key,
-        model="llama-3.3-70b-versatile",
+        model=GROQ_MODEL,
         temperature=0,
         max_tokens=128,  #query rewriting needs very few tokens
     )

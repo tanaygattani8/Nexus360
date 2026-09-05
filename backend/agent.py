@@ -24,6 +24,7 @@ from tools import (
 from memory import save_message, load_history
 from knowledge_base import search_knowledge_base as _search_kb
 from analytics import log_run
+from config import GROQ_MODEL
 
 load_dotenv()
 
@@ -195,7 +196,7 @@ def _build_llm() -> ChatGroq:
         raise EnvironmentError("GROQ_API_KEY not found in .env")
     return ChatGroq(
         api_key=api_key,
-        model="llama-3.3-70b-versatile",
+        model=GROQ_MODEL,
         temperature=0,
         max_tokens=1024,
     )

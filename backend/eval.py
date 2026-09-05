@@ -31,6 +31,7 @@ from knowledge_base import (
 from agent import run_agent
 from memory import clear_history
 from analytics import clear_runs
+from config import GROQ_MODEL
 
 load_dotenv()
 
@@ -121,7 +122,7 @@ def _retrieve_titles(query: str) -> list[str]:
 # ── SECTION 3 — LLM JUDGES ────────────────────────────────────────────────────
 def _get_llm() -> ChatGroq:
     return ChatGroq(api_key=os.getenv("GROQ_API_KEY"),
-                    model="llama-3.3-70b-versatile", temperature=0, max_tokens=256)
+                    model=GROQ_MODEL, temperature=0, max_tokens=256)
 
 
 def _parse_json(text: str) -> dict:
